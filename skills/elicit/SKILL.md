@@ -1,11 +1,11 @@
 ---
 name: elicit
-description: This skill should be used when the user wants to "build an allium spec", "elicit requirements", "capture domain behaviour", "specify a feature", or is describing functionality they want to build and needs guidance on extracting a specification through conversation.
+description: This skill should be used when the user wants to "build an tla spec", "elicit requirements", "capture domain behaviour", "specify a feature", or is describing functionality they want to build and needs guidance on extracting a specification through conversation.
 ---
 
 # Elicitation
 
-This skill guides you through building Allium specifications by conversation. The goal is to surface ambiguities and produce a specification that captures what the software does without prescribing implementation.
+This skill guides you through building TLA+ specifications by conversation. The goal is to surface ambiguities and produce a specification that captures what the software does without prescribing implementation.
 
 The same principles apply to distillation. Whether you are hearing a stakeholder describe a feature or reading code that implements it, the challenge is identical: finding the right level of abstraction.
 
@@ -25,20 +25,16 @@ Before diving into details, establish what you are specifying. Not everything ne
 
 Capture scope at the start of every spec:
 
-```
--- allium: 1
--- interview-scheduling.allium
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Scope: Interview scheduling for the hiring pipeline
--- Includes: Candidacy, Interview, Slot management, Invitations, Feedback
--- Excludes:
---   - Authentication (use oauth library spec)
---   - Payments (not applicable)
---   - Reporting dashboards (separate spec)
--- Dependencies: User entity defined in core.allium
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
-The version marker (`-- allium: N`) must be the first line of every `.allium` file. Use the version number from the root Allium skill's `version` frontmatter field.
+The version marker (`-- tla: N`) must be the first line of every `.tla` file. Use the version number from the root TLA+ skill's `version` frontmatter field.
 
 ## Finding the right level of abstraction
 
@@ -108,40 +104,24 @@ When you encounter a specific value (3 hours, 7 days, etc.), ask:
 2. **Might it vary per deployment or customer?** Make it configurable.
 3. **Is it arbitrary?** Consider whether to include it at all.
 
-```
--- Hardcoded design decision
-rule InvitationExpires {
-    when: invitation: Invitation.created_at + 7.days <= now
-    ...
-}
-
--- Configurable
-config {
-    invitation_expiry: Duration = 7.days
-}
-
-rule InvitationExpires {
-    when: invitation: Invitation.created_at + config.invitation_expiry <= now
-    ...
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Black boxes
 
 Some logic is important but belongs at a different level:
 
-```
--- Black box: we know it exists and what it considers, but not how
-ensures: Suggestion.created(
-    interviewers: InterviewerMatching.suggest(
-        considering: {
-            role.required_skills,
-            Interviewer.skills,
-            Interviewer.availability,
-            Interviewer.recent_load
-        }
-    )
-)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 The spec says there is a matching algorithm, that it considers these inputs and that it produces interviewer suggestions. The spec does not say how matching works, what weights are used or the specific algorithm.
@@ -317,7 +297,7 @@ A comment noting that two terms are equivalent is not a resolution. It guarantee
 
 ## Elicitation session structure
 
-**Opening (5 min).** Explain Allium briefly: "We're capturing what the software does, not how it's built." Set expectations: "I'll ask lots of questions, some obvious-seeming." Agree on scope for this session.
+**Opening (5 min).** Explain TLA+ briefly: "We're capturing what the software does, not how it's built." Set expectations: "I'll ask lots of questions, some obvious-seeming." Agree on scope for this session.
 
 **Scope definition (10-15 min).** Identify actors, entities, boundaries. Get the one-sentence description.
 
@@ -331,5 +311,5 @@ A comment noting that two terms are equivalent is not a resolution. It guarantee
 
 ## References
 
-- [Language reference](../../references/language-reference.md) — full Allium syntax
+- [Language reference](../../references/language-reference.md) — full TLA+ syntax
 - [Recognising library spec opportunities](./references/library-spec-signals.md) — signals, questions and decision framework for identifying library specs during elicitation

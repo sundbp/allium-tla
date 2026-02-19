@@ -1,6 +1,6 @@
 # Test generation
 
-From an Allium specification, generate:
+From an TLA+ specification, generate:
 
 **Contract tests** (per rule):
 - Success case: all preconditions met, verify all postconditions hold

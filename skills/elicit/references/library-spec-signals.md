@@ -48,7 +48,7 @@ When you detect a potential library spec, pause and explore:
 
 **Option 2: Create a new library spec**
 
-"The way you're describing this Greenhouse ATS integration sounds generic enough that it could be its own library spec. Other hiring applications might integrate with Greenhouse the same way. Should we create a separate greenhouse-ats.allium spec that this application references?"
+"The way you're describing this Greenhouse ATS integration sounds generic enough that it could be its own library spec. Other hiring applications might integrate with Greenhouse the same way. Should we create a separate greenhouse-ats.tla spec that this application references?"
 
 **Option 3: Keep it inline (rare)**
 
@@ -85,18 +85,13 @@ The application spec handles:
 
 Example boundary:
 
-```
--- Library spec (oauth.allium) handles:
---   - Provider configuration
---   - Token exchange
---   - Session lifecycle
---   - Emits: AuthenticationSucceeded, SessionExpired, etc.
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Application spec handles:
---   - Creating your User entity on first login
---   - What roles/permissions new users get
---   - Blocking suspended users from logging in
---   - Audit logging specific to your compliance needs
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ## Red flags you missed a library spec

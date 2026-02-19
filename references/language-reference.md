@@ -2,84 +2,10 @@
 
 ## File structure
 
-An Allium specification file (`.allium`) begins with a language version marker, followed by these sections in order:
+An TLA+ specification file (`.tla`) begins with a language version marker, followed by these sections in order:
 
-```
--- allium: 1
--- Comments use double-dash
--- use declarations (optional)
-
-------------------------------------------------------------
--- Given
-------------------------------------------------------------
-
--- Entity instances this module operates on (optional)
-
-------------------------------------------------------------
--- External Entities
-------------------------------------------------------------
-
--- Entities managed outside this specification
-
-------------------------------------------------------------
--- Value Types
-------------------------------------------------------------
-
--- Structured data without identity (optional section)
-
-------------------------------------------------------------
--- Enumerations
-------------------------------------------------------------
-
--- Named enumerations shared across entities (optional section)
-
-------------------------------------------------------------
--- Entities and Variants
-------------------------------------------------------------
-
--- Entities managed by this specification, plus their variants
-
-------------------------------------------------------------
--- Config
-------------------------------------------------------------
-
--- Configurable parameters for this specification
-
-------------------------------------------------------------
--- Defaults
-------------------------------------------------------------
-
--- Default entity instances
-
-------------------------------------------------------------
--- Rules
-------------------------------------------------------------
-
--- Behavioural rules organised by flow
-
-------------------------------------------------------------
--- Actor Declarations
-------------------------------------------------------------
-
--- Entity types that can interact with surfaces
-
-------------------------------------------------------------
--- Surfaces
-------------------------------------------------------------
-
--- Boundary contracts between parties
-
-------------------------------------------------------------
--- Deferred Specifications
-------------------------------------------------------------
-
--- References to detailed specs defined elsewhere
-
-------------------------------------------------------------
--- Open Questions
-------------------------------------------------------------
-
--- Unresolved design decisions
+```tla
+\* Open question: confirm desired policy and encode as invariant/action guard.
 ```
 
 ### Formatting
@@ -98,11 +24,12 @@ Indentation is significant. Blocks opened by a colon (`:`) after `for`, `if`, `e
 
 A `given` block declares the entity instances a module operates on. All rules in the module inherit these bindings.
 
-```
-given {
-    pipeline: HiringPipeline
-    calendar: InterviewCalendar
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Rules then reference `pipeline.status`, `calendar.available_slots`, etc. without ambiguity about what they refer to.
@@ -121,53 +48,39 @@ This is distinct from surface `context`, which binds a parametric scope for a bo
 
 Entities referenced but managed outside this specification:
 
-```
-external entity Role {
-    title: String
-    required_skills: Set<Skill>
-    location: Location
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 External entities define their structure but not their lifecycle. The specification checker will warn when external entities are referenced, reminding that another spec or system governs them.
 
 External entities can also serve as **type placeholders**: an entity with minimal or no fields that the consuming spec substitutes with a concrete type. This enables reusable patterns where the library spec depends on an abstraction and the consumer provides the implementation.
 
-```
--- In a comments library spec
-external entity Commentable {}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-entity Comment {
-    parent: Commentable
-    ...
-}
+EntityStates == {"absent", "active", "deleted"}
 
--- The consuming spec provides its own entity as the Commentable
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 The consuming spec maps its entity to the placeholder by using it wherever the library expects the placeholder type. This is dependency inversion at the spec level: the library depends on the abstraction, the consumer supplies the concrete type.
 
 ### Internal entities
 
-```
-entity Candidacy {
-    -- Fields (required)
-    candidate: Candidate
-    role: Role
-    status: pending | active | completed | cancelled
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-    -- Relationships (navigate to related entities)
-    invitation: Invitation with candidacy = this
-    slots: InterviewSlot with candidacy = this
+EntityStates == {"absent", "active", "deleted"}
 
-    -- Projections (filtered subsets)
-    confirmed_slots: slots where status = confirmed
-    pending_slots: slots where status = pending
-
-    -- Derived (computed values)
-    is_ready: confirmed_slots.count >= 3
-    has_expired: invitation.expires_at <= now
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Value types
@@ -196,20 +109,13 @@ Value types have no identity, are immutable and are embedded within entities. En
 
 Sum types (discriminated unions) specify that an entity is exactly one of several alternatives.
 
-```
-entity Node {
-    path: Path
-    kind: Branch | Leaf              -- discriminator field
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-variant Branch : Node {
-    children: List<Node?>            -- variant-specific field
-}
+EntityStates == {"absent", "active", "deleted"}
 
-variant Leaf : Node {
-    data: List<Integer>              -- variant-specific fields
-    log: List<Integer>
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 A sum type has three parts: a **discriminator field** whose type is a pipe-separated list of variant names, **variant declarations** using `variant X : BaseEntity`, and **variant-specific fields** that only exist for that variant. Variants inherit all fields from the base entity; the discriminator is set automatically on creation.
@@ -218,43 +124,34 @@ A sum type has three parts: a **discriminator field** whose type is a pipe-separ
 
 **Creating variant instances** — always via the variant name, not the base:
 
-```
-ensures: MentionNotification.created(user: recipient, comment: comment, mentioned_by: author)
--- Not: Notification.created(...)  -- Error: must specify which variant
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Type guards** narrow an entity to a specific variant, enabling access to its fields. They appear in `requires` clauses (guarding the entire rule) and `if` expressions (guarding a branch):
 
-```
--- requires guard: entire rule assumes Leaf
-rule ProcessLeaf {
-    when: ProcessNode(node)
-    requires: node.kind = Leaf
-    ensures: Results.created(data: node.data + node.log)
-}
-
--- if guard: branch-level narrowing
-rule ProcessNode {
-    when: ProcessNode(node)
-    ensures:
-        if node.kind = Branch:
-            for child in node.children: ProcessNode(child)
-        else:
-            Results.created(data: node.data + node.log)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Accessing variant-specific fields outside a type guard is an error. Sum types guarantee exhaustiveness (all variants declared upfront), mutual exclusivity (exactly one variant), type safety (variant fields only within guards) and automatic discrimination (set on creation).
 
 A `.created` trigger on the base entity fires when any variant is created. The bound variable holds the specific variant instance, and type guards can narrow it:
 
-```
-rule HandleNotification {
-    when: notification: Notification.created
-    ensures:
-        if notification.kind = MentionNotification:
-            ...
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Use sum types when variants have fundamentally different data or behaviour. Do not use when simple status enums suffice or variants share most of their structure.
@@ -303,21 +200,13 @@ Inline enums are anonymous: they have no type identity. Two inline enum fields c
 
 This catches a common mistake when tracking previous state:
 
-```
--- Error: cannot compare two inline enum fields
-entity Order {
-    status: pending | shipped | delivered
-    previous_status: pending | shipped | delivered
-}
-requires: order.status != order.previous_status    -- checker error
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Fix: extract a named enum
-enum OrderStatus { pending | shipped | delivered }
-entity Order {
-    status: OrderStatus
-    previous_status: OrderStatus
-}
-requires: order.status != order.previous_status    -- valid
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **Entity references:**
@@ -330,16 +219,13 @@ role: Role
 
 Always use singular entity names; the relationship name indicates plurality:
 
-```
--- One-to-one (singular relationship name)
-invitation: Invitation with candidacy = this
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- One-to-many (plural relationship name, but singular entity name)
-slots: InterviewSlot with candidacy = this
-feedback_requests: FeedbackRequest with interview = this
+EntityStates == {"absent", "active", "deleted"}
 
--- Self-referential
-replies: Comment with reply_to = this
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 The `with X = this` syntax declares a relationship by naming the field on the related entity that points back. `this` refers to the enclosing entity instance. The syntax is the same whether the relationship is one-to-one, one-to-many or self-referential.
@@ -394,20 +280,12 @@ Rules define behaviour: what happens when triggers occur.
 
 ### Rule structure
 
-```
-rule RuleName {
-    when: TriggerCondition
-
-    let binding1 = expression      -- bindings can appear before requires
-
-    requires: Precondition1
-    requires: Precondition2
-
-    let binding2 = expression      -- or between requires and ensures
-
-    ensures: Postcondition1
-    ensures: Postcondition2
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 | Clause | Purpose |
@@ -424,13 +302,12 @@ Place `let` bindings where they make the rule most readable, typically just befo
 
 A `for` clause applies the rule body once per element in a collection. The binding variable is available in all subsequent clauses.
 
-```
-rule ProcessDigests {
-    when: schedule: DigestSchedule.next_run_at <= now
-    for user in Users where notification_setting.digest_enabled:
-        let settings = user.notification_setting
-        ensures: DigestBatch.created(user: user, ...)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 The `where` keyword filters the collection, consistent with projection syntax. The indented body contains the rule's `let`, `requires` and `ensures` clauses scoped to each element.
@@ -477,12 +354,12 @@ when: request: FeedbackRequest.requested_at + 24.hours <= now
 ```
 
 Temporal triggers use explicit `var: Type` binding, the same as state transitions and entity creation. The binding names the entity instance and its type. Temporal triggers fire once when the condition becomes true. Always include a `requires` clause to prevent re-firing:
-```
-rule InvitationExpires {
-    when: invitation: Invitation.expires_at <= now
-    requires: invitation.status = pending  -- prevents re-firing
-    ensures: invitation.status = expired
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Derived condition becomes true:**
@@ -560,24 +437,24 @@ In state change assignments (`entity.field = expression`), the expression on the
 
 Worked example: suppose `account.balance` is 100 before the rule fires.
 
-```
-ensures: account.balance = account.balance + 50       -- RHS reads pre-rule value: 100 + 50 = 150
-ensures:
-    if account.balance > 120:                          -- condition reads resulting state: 150 > 120, true
-        Notification.created(account: account, type: high_balance)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 The assignment reads 100 (the pre-rule value). The `if` guard reads 150 (the resulting state after the assignment).
 
 Common mistake: assuming `if` guards in ensures read pre-rule values. Suppose `order.status` is `pending` before the rule fires.
 
-```
-ensures: order.status = shipped
-ensures:
-    if order.status = pending:                             -- WRONG: reads resulting state (shipped), so this is false
-        Notification.created(to: order.customer, template: order_pending_reminder)
-    if order.status = shipped:                             -- reads resulting state (shipped), so this is true
-        Notification.created(to: order.customer, template: order_shipped)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 The author likely meant "if the order was pending before we changed it". But the `if` guard inside ensures reads the resulting state, not the pre-rule state. To test pre-rule values, use a `let` binding or `requires` clause before the ensures block.
@@ -595,35 +472,23 @@ ensures: user.locked_until = null              -- clearing an optional field
 Setting an optional field to `null` asserts the field becomes absent. Only valid for fields typed as optional (`T?`).
 
 **Entity creation** — create a new entity using `.created()`:
-```
-ensures: Interview.created(
-    candidacy: invitation.candidacy,
-    slot: slot,
-    interviewers: slot.confirmed_interviewers,
-    status: scheduled
-)
-
-ensures: Email.created(
-    to: candidate.email,
-    template: interview_invitation,
-    data: { slots: slots }
-)
-
-ensures: CalendarInvite.created(
-    attendees: interviewers + candidate,
-    time: slot.time,
-    duration: interview_type.duration
-)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Entity creation uses `.created()` exclusively. Domain meaning lives in entity names and rule names, not in creation verbs. `Email.created(...)` not `Email.sent(...)`.
 
 When creating entities that need to be referenced later in the same ensures block, use explicit `let` binding:
-```
-ensures:
-    let slot = InterviewSlot.created(time: time, candidacy: candidacy, status: pending)
-    for interviewer in interviewers:
-        SlotConfirmation.created(slot: slot, interviewer: interviewer)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 A `let` binding within an ensures block is visible to all subsequent statements in that block, including nested `for` loops. It does not leak outside the ensures block.
@@ -658,13 +523,12 @@ ensures:
 ```
 
 **Conditional outcomes:**
-```
-ensures:
-    if candidacy.retry_count < 2:
-        candidacy.status = pending_scheduling
-    else:
-        candidacy.status = scheduling_stalled
-        Notification.created(...)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ---
@@ -673,30 +537,12 @@ ensures:
 
 ### Navigation
 
-```
--- Field access
-interview.status
-candidate.email
-
--- Relationship traversal
-interview.feedback_requests
-candidacy.slots
-
--- Chained navigation
-interview.candidacy.candidate.email
-feedback_request.interview.slot.time
-
--- Optional navigation (short-circuits to null if left side is null)
-inherits_from?.effective_permissions
-reply_to?.author
-
--- Null coalescing (provides default when left side is null)
-identity.timezone ?? "UTC"
-inherits_from?.effective_permissions ?? {}
-
--- Self-reference
-this                                        -- the instance being defined or identified
-replies: Comment with reply_to = this       -- all Comments whose reply_to is this entity
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 `this` refers to the instance of the enclosing type. It is valid in two contexts:
@@ -717,10 +563,12 @@ Curly braces with field names look up the specific instance where those fields m
 
 When the local variable name differs from the field name, use the explicit form:
 
-```
-let actor_membership = WorkspaceMembership{user: actor, workspace: workspace}
-let share = ResourceShare{resource: resource, user: inviter}
-requires: not exists User{email: new_email}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Collection operations
@@ -799,18 +647,12 @@ not (a or b)  -- equivalent to: not a and not b
 
 ### Conditional expressions
 
-```
--- Inline (single values)
-email_status: if settings.email_on_mention = never: skipped else: pending
-thread_depth: if is_reply: reply_to.thread_depth + 1 else: 0
-
--- Block (multiple outcomes)
-ensures:
-    if candidacy.retry_count < 2:
-        candidacy.status = pending_scheduling
-    else:
-        candidacy.status = scheduling_stalled
-        Notification.created(...)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Both forms use the same `if condition: ... else: ...` syntax. The inline form is for single-value assignments only. If either branch needs multiple statements or entity creation, use block form. Omit `else` when only the true branch has an effect.
@@ -829,54 +671,49 @@ Each `else if` adds a branch. The final `else` provides a fallback.
 
 `exists` can also be used as a condition in `if` expressions, not just in `requires`. When `exists x` is used as an `if` condition, `x` is guaranteed non-null within the `if` body and can be accessed safely:
 
-```
-ensures:
-    if exists existing:
-        not exists existing
-    else:
-        CommentReaction.created(comment: comment, user: user, emoji: emoji)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Existence
 
 The `exists` keyword checks whether an entity instance exists. Use `not exists` for negation.
 
-```
--- Entity looked up via let binding
-let user = User{email}
-requires: exists user
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Join entity lookup
-requires: exists WorkspaceMembership{user, workspace}
+EntityStates == {"absent", "active", "deleted"}
 
--- Negation
-requires: not exists User{email: email}
-requires: not exists ResourceInvitation{resource, email}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 In `ensures` clauses, `not exists` asserts that an entity has been removed from the system:
 
-```
--- Entity removal
-ensures: not exists target_membership
-ensures: not exists CommentMention{comment, user}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Bulk removal
-ensures:
-    for d in workspace.deleted_documents:
-        not exists d
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 If the entity is already absent, the postcondition is trivially satisfied (no error, no operation). This follows from declarative semantics: `not exists x` asserts a property of the resulting state, not an imperative command.
 
 This is distinct from soft delete, which changes a field rather than removing the entity:
 
-```
--- Soft delete (entity still exists, status changes)
-ensures: document.status = deleted
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
--- Hard delete (entity no longer exists)
-ensures: not exists document
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Literals
@@ -926,18 +763,14 @@ Because `with` defines a relationship from the universe of all instances, it nee
 - **`with`** appears in relationship declarations. The predicate defines the structural link and must reference `this`.
 - **`where`** appears in projections, iteration, surface context, actor identification and surface `let` bindings. The predicate filters an existing collection and must not reference `this`.
 
-```
--- Surface context (where)
-context assignment: SlotConfirmation where interviewer = viewer
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
--- Actor identification (where)
-User where role = admin
-
--- Iteration (where)
-for user in Users where notification_setting.digest_enabled:
-
--- Surface let binding (where)
-let comments = Comments where parent = parent and status = active
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 Both `with` and `where` predicates support the same expression language as `requires` clauses: field navigation (including chained), comparisons, arithmetic, boolean combinators (`and`, `or`, `not`), bare boolean expressions and `in` for set membership. `where notification_setting.digest_enabled` and `where notification_setting.digest_enabled = true` are equivalent.
@@ -961,24 +794,21 @@ Entity collections are typically used in rule-level `for` clauses and surface `l
 
 Reference detailed specifications defined elsewhere:
 
-```
-deferred InterviewerMatching.suggest    -- see: detailed/interviewer-matching.allium
-deferred SlotRecovery.initiate          -- see: slot-recovery.allium
+```tla
+CONSTANT DeferredOperator
+ASSUME DeferredOperator \in [Nat -> Values]
 ```
 
 This allows the main specification to remain succinct while acknowledging that detail exists elsewhere.
 
 Deferred specifications are invoked at call sites using dot notation. They can appear as standalone ensures clauses or as expressions that return a value:
 
-```
--- Standalone invocation (the deferred spec handles the outcome)
-ensures: InterviewerMatching.suggest(candidacy)
-
--- Expression usage (the deferred spec returns a value)
-ensures: OnCallPaged(team: EscalationPolicy.at_level(level), priority: immediate)
+```tla
+CONSTANT DeferredOperator
+ASSUME DeferredOperator \in [Nat -> Values]
 ```
 
-Unlike black box functions, which model opaque external computations, deferred specifications represent Allium logic that is fully specified elsewhere. The deferred declaration signals that the detail exists and is maintained separately.
+Unlike black box functions, which model opaque external computations, deferred specifications represent TLA+ logic that is fully specified elsewhere. The deferred declaration signals that the detail exists and is maintained separately.
 
 ---
 
@@ -986,9 +816,8 @@ Unlike black box functions, which model opaque external computations, deferred s
 
 Capture unresolved design decisions:
 
-```
-open question "Admin ownership - should admins be assigned to specific roles?"
-open question "Multiple interview types - how is type assigned to candidacy?"
+```tla
+\* Open question: confirm desired policy and encode as invariant/action guard.
 ```
 
 Open questions are surfaced by the specification checker as warnings, indicating the spec is incomplete.
@@ -999,13 +828,10 @@ Open questions are surfaced by the specification checker as warnings, indicating
 
 A `config` block declares configurable parameters for the specification. Each parameter has a name, type and default value.
 
-```
-config {
-    min_password_length: Integer = 12
-    max_login_attempts: Integer = 5
-    lockout_duration: Duration = 15.minutes
-    reset_token_expiry: Duration = 1.hour
-}
+```tla
+CONSTANTS RESET_TOKEN_EXPIRY, MAX_LOGIN_ATTEMPTS
+ASSUME RESET_TOKEN_EXPIRY \in Nat
+ASSUME MAX_LOGIN_ATTEMPTS \in Nat
 ```
 
 Rules reference config values with dot notation:
@@ -1017,11 +843,9 @@ ensures: token.expires_at = now + config.reset_token_expiry
 
 External specs declare their own config blocks. Consuming specs configure them via the qualified name:
 
-```
-oauth/config {
-    session_duration: 8.hours
-    link_expiry: 15.minutes
-}
+```tla
+\* Compose with library modules via EXTENDS and module instantiation.
+EXTENDS Naturals, Sequences
 ```
 
 External config values are referenced as `oauth/config.session_duration`.
@@ -1057,25 +881,22 @@ default Role editor = {
 
 Namespaces are prefixes that organise names. Use qualified names to reference entities and triggers from other specs:
 
-```
-entity Candidacy {
-    candidate: Candidate
-    authenticated_via: google-oauth/Session
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Using other specs
 
 The `use` keyword brings in another spec with an alias:
 
-```
-use "github.com/allium-specs/google-oauth/abc123def" as oauth
-use "github.com/allium-specs/feedback-collection/def456" as feedback
-
-entity Candidacy {
-    authenticated_via: oauth/Session
-    ...
-}
+```tla
+\* Compose with library modules via EXTENDS and module instantiation.
+EXTENDS Naturals, Sequences
 ```
 
 Coordinates are immutable references (git SHAs or content hashes), not version numbers. No version resolution algorithms, no lock files. A spec is immutable once published.
@@ -1084,46 +905,33 @@ Coordinates are immutable references (git SHAs or content hashes), not version n
 
 External specs' entities are used directly with qualified names:
 
-```
-rule RequestFeedback {
-    when: interview: Interview.slot.time.start + 5.minutes <= now
-    ensures: feedback/Request.created(
-        subject: interview,
-        respondents: interview.interviewers,
-        deadline: 24.hours
-    )
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Responding to external triggers
 
 Any trigger or state transition from another spec can be responded to. No extension points need to be declared:
 
-```
-rule AuditLogin {
-    when: oauth/SessionCreated(session)
-    ensures: AuditLog.created(event: login, user: session.user)
-}
-
-rule NotifyOnFeedbackSubmitted {
-    when: feedback/Request.status transitions_to submitted
-    ensures:
-        for admin in Users where role = admin:
-            Notification.created(to: admin, template: feedback_received)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Configuration
 
 Imported specs expose their own config parameters. Consuming specs set values via the qualified name:
 
-```
-use "github.com/allium-specs/google-oauth/abc123def" as oauth
-
-oauth/config {
-    session_duration: 8.hours
-    link_expiry: 15.minutes
-}
+```tla
+\* Compose with library modules via EXTENDS and module instantiation.
+EXTENDS Naturals, Sequences
 ```
 
 Reference external config values as `oauth/config.session_duration`. This uses the same `config` mechanism as local config blocks (see [Config](#config)).
@@ -1137,8 +945,8 @@ Avoid breaking changes: accrete (add new fields, triggers, states; never remove 
 For specs within the same project, use relative paths:
 
 ```
-use "./candidacy.allium" as candidacy
-use "./scheduling.allium" as scheduling
+use "./candidacy.tla" as candidacy
+use "./scheduling.tla" as scheduling
 ```
 
 External entities in one spec may be internal entities in another. The boundary is determined by the `external` keyword, not by file location.
@@ -1159,29 +967,28 @@ Surfaces do not specify implementation details (database schemas, wire protocols
 
 When a surface has a specific external party, declare actor types:
 
-```
-actor Interviewer {
-    identified_by: User where role = interviewer
-}
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-actor Admin {
-    identified_by: User where role = admin
-}
-
-actor AuthenticatedUser {
-    identified_by: User where active_sessions.count > 0
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 The `identified_by` expression specifies the entity type and condition that identifies the actor. It takes the form `EntityType where condition`, where the condition uses the entity's own fields, derived values and relationships. When an actor type is used in a `facing` clause, the binding variable has the entity type from the actor's `identified_by` expression. For example, `facing viewer: Interviewer` where `Interviewer` has `identified_by: User where role = interviewer` binds `viewer` as type `User`.
 
 When an actor's identity depends on a context that varies per surface, declare the expected context type with a `within` clause and reference it in `identified_by`:
 
-```
-actor WorkspaceAdmin {
-    within: Workspace
-    identified_by: User where WorkspaceMembership{user: this, workspace: within}.can_admin = true
-}
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 The `within` clause declares the entity type this actor requires from the surface's `context` binding. This makes the dependency explicit: the checker can verify that any surface using this actor provides a compatible context.
@@ -1191,12 +998,14 @@ Two keywords are available inside `identified_by`:
 - `this` — the entity instance being tested (here, the User). Same semantics as `this` in entity declarations.
 - `within` — the entity bound by the `context` clause of the surface that uses this actor, constrained to the type declared in the actor's `within` clause.
 
-```
-surface WorkspaceManagement {
-    facing admin: WorkspaceAdmin
-    context workspace: Workspace    -- matches WorkspaceAdmin's within: Workspace
-    ...
-}
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 An actor declaration with a `within` clause can only be used in surfaces that declare a `context` clause. The surface's context type must match the actor's declared `within` type.
@@ -1205,30 +1014,14 @@ The `facing` clause accepts either an actor type or an entity type directly. Use
 
 ### Surface structure
 
-```
-surface SurfaceName {
-    facing party: ActorType
-    context item: EntityType [where predicate]
-    let binding = expression
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-    exposes:
-        item.field [when condition]
-        ...
-
-    provides:
-        Action(party, item, ...) [when condition]
-        ...
-
-    guarantee: ConstraintName
-    guidance: -- non-normative advice
-
-    related:
-        OtherSurface(item.relationship) [when condition]
-        ...
-
-    timeout:
-        RuleName [when temporal_condition]
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 Variable names (`party`, `item`) are user-chosen, not reserved keywords. All clauses are optional.
@@ -1247,66 +1040,36 @@ Variable names (`party`, `item`) are user-chosen, not reserved keywords. All cla
 
 ### Examples
 
-```
-surface InterviewerPendingAssignments {
-    facing viewer: Interviewer
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-    context assignment: InterviewAssignment
-        where interviewer = viewer and status = pending
-
-    exposes:
-        assignment.interview.scheduled_time
-        assignment.interview.candidate.name
-        assignment.interview.duration
-
-    provides:
-        InterviewerConfirmsAssignment(viewer, assignment)
-        InterviewerDeclinesAssignment(viewer, assignment, reason?)
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
-```
-surface InterviewerDashboard {
-    facing viewer: Interviewer
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-    context assignment: SlotConfirmation where interviewer = viewer
-
-    exposes:
-        assignment.slot.time
-        assignment.slot.candidacy.candidate.name
-        assignment.status
-        assignment.slot.other_confirmations.interviewer.name
-
-    provides:
-        InterviewerConfirmsSlot(viewer, assignment.slot)
-            when assignment.status = pending
-        InterviewerDeclinesSlot(viewer, assignment.slot)
-            when assignment.status = pending
-
-    related:
-        InterviewDetail(assignment.slot.interview)
-            when assignment.slot.interview != null
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Timeout example** — a `timeout` clause references an existing temporal rule by name and binds it to the surface's context. The rule name must correspond to a rule with a temporal trigger defined elsewhere in the spec. The `when` condition is optional: include it to restate the temporal expression for readability, or omit it when the rule name is self-explanatory. When present, the checker verifies the `when` condition matches the referenced rule's trigger.
 
-```
-surface InvitationView {
-    facing recipient: Candidate
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-    context invitation: ResourceInvitation where email = recipient.email
-
-    exposes:
-        invitation.resource.name
-        invitation.is_valid
-
-    provides:
-        AcceptInvitation(invitation, recipient) when invitation.is_valid
-
-    timeout:
-        InvitationExpires when invitation.expires_at <= now
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 The rule name alone is sufficient when the temporal condition is clear from the rule's name:
@@ -1322,7 +1085,7 @@ When the `when` condition is included, it serves as inline documentation. The ch
 
 ## Validation rules
 
-A valid Allium specification must satisfy:
+A valid TLA+ specification must satisfy:
 
 **Structural validity:**
 1. All referenced entities and values exist (internal, external or imported)
@@ -1417,14 +1180,12 @@ ensures: CandidateInformed(about: options_available, data: { slots: slots })
 ```
 
 **Algorithm in rules:**
-```
--- Bad
-ensures: selected = interviewers.sortBy(load).take(3).filter(available)
-
--- Good
-ensures: Suggestion.created(
-    interviewers: InterviewerMatching.suggest(considering: [...])
-)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Queries in rules:**
@@ -1446,19 +1207,12 @@ interviewers.any(i => i.can_solo)
 ```
 
 **Missing temporal guards:**
-```
--- Bad: can fire repeatedly
-rule InvitationExpires {
-    when: invitation: Invitation.expires_at <= now
-    ensures: invitation.status = expired
-}
-
--- Good: guard prevents re-firing
-rule InvitationExpires {
-    when: invitation: Invitation.expires_at <= now
-    requires: invitation.status = pending
-    ensures: invitation.status = expired
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Overly broad status enums:**
@@ -1473,30 +1227,12 @@ is_archived: Boolean
 ```
 
 **`transitions_to` doesn't fire on creation:**
-```
--- Bad: won't fire when Interview is created with status = scheduled
-rule NotifyOnScheduled {
-    when: interview: Interview.status transitions_to scheduled
-    ensures: Email.created(to: interview.candidate.email, template: interview_scheduled)
-}
-
--- Good: use becomes when the rule should fire regardless of how the state was reached
-rule NotifyOnScheduled {
-    when: interview: Interview.status becomes scheduled
-    ensures: Email.created(to: interview.candidate.email, template: interview_scheduled)
-}
-
--- Also good: handle creation and transition separately when the response differs
-rule NotifyOnRescheduled {
-    when: interview: Interview.status transitions_to scheduled
-    ensures: Email.created(to: interview.candidate.email, template: interview_rescheduled)
-}
-
-rule NotifyOnCreatedScheduled {
-    when: interview: Interview.created
-    requires: interview.status = scheduled
-    ensures: Email.created(to: interview.candidate.email, template: interview_scheduled)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Magic numbers in rules:**

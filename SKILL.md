@@ -1,15 +1,15 @@
 ---
-name: allium
+name: tla
 description: An LLM-native language for sharpening intent alongside implementation. Velocity through clarity.
 version: 1
 auto_trigger:
-  - file_patterns: ["**/*.allium"]
-  - keywords: ["allium", "allium spec", "allium specification", ".allium file"]
+  - file_patterns: ["**/*.tla"]
+  - keywords: ["tla", "tla spec", "tla specification", ".tla file"]
 ---
 
-# Allium
+# TLA+
 
-Allium is a formal language for capturing software behaviour at the domain level. It sits between informal feature descriptions and implementation, providing a precise way to specify what software does without prescribing how it's built.
+TLA+ is a formal language for capturing software behaviour at the domain level. It sits between informal feature descriptions and implementation, providing a precise way to specify what software does without prescribing how it's built.
 
 The name comes from the botanical family containing onions and shallots, continuing a tradition in behaviour specification tooling established by Cucumber and Gherkin.
 
@@ -21,13 +21,13 @@ Key principles:
 - Forces ambiguities into the open before implementation
 - Implementation-agnostic: the same spec could be implemented in any language
 
-Allium does NOT specify programming language or framework choices, database schemas or storage mechanisms, API designs or UI layouts, or internal algorithms (unless they are domain-level concerns).
+TLA+ does NOT specify programming language or framework choices, database schemas or storage mechanisms, API designs or UI layouts, or internal algorithms (unless they are domain-level concerns).
 
 ## Routing table
 
 | Task | Skill | When |
 |------|-------|------|
-| Writing or reading `.allium` files | this skill | You need language syntax and structure |
+| Writing or reading `.tla` files | this skill | You need language syntax and structure |
 | Building a spec through conversation | `elicit` | User describes a feature or behaviour they want to build |
 | Extracting a spec from existing code | `distill` | User has implementation code and wants a spec from it |
 
@@ -35,32 +35,24 @@ Allium does NOT specify programming language or framework choices, database sche
 
 ### Entity
 
-```
-entity Candidacy {
-    -- Fields
-    candidate: Candidate
-    role: Role
-    status: pending | active | completed | cancelled   -- inline enum
-    retry_count: Integer
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-    -- Relationships
-    invitation: Invitation with candidacy = this         -- one-to-one
-    slots: InterviewSlot with candidacy = this           -- one-to-many
+EntityStates == {"absent", "active", "deleted"}
 
-    -- Projections
-    confirmed_slots: slots where status = confirmed
-    pending_slots: slots where status = pending
-
-    -- Derived
-    is_ready: confirmed_slots.count >= 3
-    has_expired: invitation.expires_at <= now
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### External entity
 
-```
-external entity Role { title: String, required_skills: Set<Skill>, location: Location }
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Value type
@@ -73,20 +65,13 @@ value TimeRange { start: Timestamp, end: Timestamp, duration: end - start }
 
 A base entity declares a discriminator field whose capitalised values name the variants. Variants use the `variant` keyword.
 
-```
-entity Node {
-    path: Path
-    kind: Branch | Leaf              -- discriminator field
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-variant Branch : Node {
-    children: List<Node?>
-}
+EntityStates == {"absent", "active", "deleted"}
 
-variant Leaf : Node {
-    data: List<Integer>
-    log: List<Integer>
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 Lowercase pipe values are enum literals (`status: pending | active`). Capitalised values are variant references (`kind: Branch | Leaf`). Type guards (`requires:` or `if` branches) narrow to a variant and unlock its fields.
@@ -95,27 +80,24 @@ Lowercase pipe values are enum literals (`status: pending | active`). Capitalise
 
 Declares the entity instances a module's rules operate on. All rules inherit these bindings. Not every module needs one: rules scoped by triggers on domain entities get their entities from the trigger. `given` is for specs where rules operate on shared instances that exist once per module scope.
 
-```
-given {
-    pipeline: HiringPipeline
-    calendar: InterviewCalendar
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Imported module instances are accessed via qualified names (`scheduling/calendar`) and do not appear in the local `given` block. Distinct from surface `context`, which binds a parametric scope for a boundary contract.
 
 ### Rule
 
-```
-rule InvitationExpires {
-    when: invitation: Invitation.expires_at <= now
-    requires: invitation.status = pending
-    let remaining = invitation.proposed_slots where status != cancelled
-    ensures: invitation.status = expired
-    ensures:
-        for s in remaining:
-            s.status = cancelled
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Trigger types
@@ -134,13 +116,12 @@ All entity-scoped triggers use explicit `var: Type` binding. Use `_` as a discar
 
 A `for` clause applies the rule body once per element in a collection:
 
-```
-rule ProcessDigests {
-    when: schedule: DigestSchedule.next_run_at <= now
-    for user in Users where notification_setting.digest_enabled:
-        let settings = user.notification_setting
-        ensures: DigestBatch.created(user: user, ...)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Ensures patterns
@@ -160,24 +141,14 @@ In state change assignments, the right-hand expression references pre-rule field
 
 ### Surface
 
-```
-surface InterviewerDashboard {
-    facing viewer: Interviewer
+```tla
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
 
-    context assignment: SlotConfirmation where interviewer = viewer
-
-    exposes:
-        assignment.slot.time
-        assignment.status
-
-    provides:
-        InterviewerConfirmsSlot(viewer, assignment.slot)
-            when assignment.status = pending
-
-    related:
-        InterviewDetail(assignment.slot.interview)
-            when assignment.slot.interview != null
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<otherState>>
 ```
 
 Surfaces define contracts at boundaries. The `facing` clause names the external party, `context` scopes the entity. The remaining clauses use a single vocabulary regardless of whether the boundary is user-facing or code-to-code: `exposes` (visible data, supports `for` iteration over collections), `provides` (available operations with optional when-guards), `guarantee` (constraints that must hold), `guidance` (non-normative advice), `related` (associated surfaces reachable from this one), `timeout` (references to temporal rules that apply within the surface's context).
@@ -195,18 +166,17 @@ Navigation: `interview.candidacy.candidate.email`, `reply_to?.author` (optional)
 ### Modular specs
 
 ```
-use "github.com/allium-specs/google-oauth/abc123def" as oauth
+use "github.com/tla-specs/google-oauth/abc123def" as oauth
 ```
 
-Qualified names reference entities across specs: `oauth/Session`. Coordinates are immutable (git SHAs or content hashes). Local specs use relative paths: `use "./candidacy.allium" as candidacy`.
+Qualified names reference entities across specs: `oauth/Session`. Coordinates are immutable (git SHAs or content hashes). Local specs use relative paths: `use "./candidacy.tla" as candidacy`.
 
 ### Config
 
-```
-config {
-    invitation_expiry: Duration = 7.days
-    max_login_attempts: Integer = 5
-}
+```tla
+CONSTANTS RESET_TOKEN_EXPIRY, MAX_LOGIN_ATTEMPTS
+ASSUME RESET_TOKEN_EXPIRY \in Nat
+ASSUME MAX_LOGIN_ATTEMPTS \in Nat
 ```
 
 Rules reference config values as `config.invitation_expiry`. For default entity instances, use `default`.
@@ -219,14 +189,15 @@ default Role viewer = { name: "viewer", permissions: { "documents.read" } }
 
 ### Deferred specs
 
-```
-deferred InterviewerMatching.suggest    -- see: detailed/interviewer-matching.allium
+```tla
+CONSTANT DeferredOperator
+ASSUME DeferredOperator \in [Nat -> Values]
 ```
 
 ### Open questions
 
-```
-open question "Admin ownership - should admins be assigned to specific roles?"
+```tla
+\* Open question: confirm desired policy and encode as invariant/action guard.
 ```
 
 ## References

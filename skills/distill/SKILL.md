@@ -1,11 +1,11 @@
 ---
 name: distill
-description: This skill should be used when the user has "existing code" and wants to "extract a spec", "distil behaviour from code", "reverse engineer a specification", or wants to produce an Allium specification from an existing codebase.
+description: This skill should be used when the user has "existing code" and wants to "extract a spec", "distil behaviour from code", "reverse engineer a specification", or wants to produce an TLA+ specification from an existing codebase.
 ---
 
 # Distillation guide
 
-This guide covers extracting Allium specifications from existing codebases. The core challenge is the same as forward elicitation: finding the right level of abstraction. In elicitation you filter out implementation ideas as they arise. In distillation you filter out implementation details that already exist. Both require the same judgement about what matters at the domain level.
+This guide covers extracting TLA+ specifications from existing codebases. The core challenge is the same as forward elicitation: finding the right level of abstraction. In elicitation you filter out implementation ideas as they arise. In distillation you filter out implementation details that already exist. Both require the same judgement about what matters at the domain level.
 
 Code tells you *how* something works. A specification captures *what* it does and *why* it matters. The skill is asking "why does the stakeholder care about this?" and "could this be different while still being the same system?"
 
@@ -41,8 +41,8 @@ For any code path you encounter, ask: "If we rebuilt this system from scratch, w
 At the top of a distilled spec, document what is included and excluded:
 
 ```
--- allium: 1
--- interview-scheduling.allium
+-- tla: 1
+-- interview-scheduling.tla
 
 -- Scope: Interview scheduling flow only
 -- Includes: Candidacy, Interview, InterviewSlot, Invitation, Feedback
@@ -53,7 +53,7 @@ At the top of a distilled spec, document what is included and excluded:
 --   - Greenhouse sync (use greenhouse library spec)
 ```
 
-The version marker (`-- allium: N`) must be the first line of every `.allium` file. Use the version number from the root Allium skill's `version` frontmatter field.
+The version marker (`-- tla: N`) must be the first line of every `.tla` file. Use the version number from the root TLA+ skill's `version` frontmatter field.
 
 ## Finding the right level of abstraction
 
@@ -139,27 +139,12 @@ def send_invitation(candidate_id: int, slot_ids: List[int]) -> Invitation:
     return invitation
 ```
 
-```
--- Specification should say:
-rule SendInvitation {
-    when: SendInvitation(candidacy, slots)
-
-    requires: slots.all(s => s.status = confirmed)
-
-    ensures:
-        for s in slots:
-            s.status = proposed
-    ensures: Invitation.created(
-        candidacy: candidacy,
-        slots: slots,
-        expires_at: now + 7.days,
-        status: pending
-    )
-    ensures: Email.created(
-        to: candidacy.candidate.email,
-        template: interview_invitation
-    )
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 What we dropped:
@@ -239,11 +224,13 @@ class Candidate(Base):
 ```
 
 **Almost always implementation.** The spec should say:
-```
-entity Candidate {
-    skills: Set<String>
-    metadata: String?              -- or model specific fields
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 The specific database is rarely domain-level. Exception: if the system explicitly promises PostgreSQL compatibility or specific PostgreSQL features to users.
@@ -271,12 +258,13 @@ class GreenhouseSync:
 - The integration is an implementation detail of "candidates are imported"
 
 Spec:
-```
-external entity Candidate {
-    name: String
-    email: String
-    source: CandidateSource
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **Product-level if:**
@@ -285,20 +273,13 @@ external entity Candidate {
 - Greenhouse-specific features are exposed (like syncing feedback back)
 
 Spec:
-```
-external entity Candidate {
-    name: String
-    email: String
-    greenhouse_id: String?  -- explicitly modeled
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-rule SyncFromGreenhouse {
-    when: GreenhouseWebhookReceived(candidate_data)
-    ensures: Candidate.created(
-        ...
-        greenhouse_id: candidate_data.id
-    )
-}
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### The "Multiple implementations" heuristic
@@ -350,10 +331,13 @@ class Invitation(Base):
 ```
 
 Becomes:
-```
-entity Invitation {
-    status: pending | accepted | declined | expired
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 Look for enum definitions, status or state columns, constants like `STATUS_PENDING = 'pending'`, and state machine libraries (e.g. `transitions`, `django-fsm`).
@@ -395,27 +379,12 @@ def accept_invitation(invitation_id: int, slot_id: int):
 ```
 
 Extract:
-```
-rule CandidateAcceptsInvitation {
-    when: CandidateAccepts(invitation, slot)
-
-    requires: invitation.status = pending
-    requires: invitation.expires_at > now
-    requires: slot in invitation.slots
-
-    ensures: invitation.status = accepted
-    ensures: slot.status = booked
-    ensures:
-        for s in invitation.slots:
-            if s != slot: s.status = available
-    ensures: Interview.created(
-        candidacy: invitation.candidacy,
-        slot: slot,
-        status: scheduled
-    )
-    ensures: Notification.created(to: slot.interviewers, ...)
-    ensures: Email.created(to: invitation.candidate.email, ...)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 **Key extraction patterns:**
@@ -464,24 +433,12 @@ def send_reminders():
 ```
 
 Extract:
-```
-rule InvitationExpires {
-    when: invitation: Invitation.expires_at <= now
-    requires: invitation.status = pending
-
-    ensures: invitation.status = expired
-    ensures:
-        for s in invitation.slots:
-            s.status = available
-    ensures: CandidateInformed(candidate: invitation.candidate, about: invitation_expired)
-}
-
-rule InterviewReminder {
-    when: interview: Interview.slot.time - 1.hour <= now
-    requires: interview.status = scheduled
-
-    ensures: Notification.created(to: interview.interviewers, template: reminder)
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Step 5: Identify external boundaries
@@ -505,11 +462,13 @@ def import_from_greenhouse(webhook_data):
 ```
 
 Suggests:
-```
-external entity Candidate {
-    name: String
-    email: String
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Step 6: Abstract away implementation
@@ -517,26 +476,23 @@ external entity Candidate {
 Now make a pass through your extracted spec and remove implementation details.
 
 **Before (too concrete):**
-```
-entity Invitation {
-    candidate_id: Integer
-    token: String(32)
-    created_at: DateTime
-    expires_at: DateTime
-    status: pending | accepted | declined | expired
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **After (domain-level):**
-```
-entity Invitation {
-    candidacy: Candidacy
-    created_at: Timestamp
-    expires_at: Timestamp
-    status: pending | accepted | declined | expired
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-    is_expired: expires_at <= now
-}
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 Changes:
@@ -616,80 +572,61 @@ OAUTH_CONFIG = {
 **Option 1: Reference an existing library spec**
 
 If a standard library spec exists for this integration:
-```
-use "github.com/allium-specs/stripe-billing/abc123" as stripe
-
--- Application responds to Stripe events
-rule ActivateSubscription {
-    when: stripe/PaymentSucceeded(invoice)
-    ...
-}
+```tla
+\* Compose with library modules via EXTENDS and module instantiation.
+EXTENDS Naturals, Sequences
 ```
 
 **Option 2: Create a separate library spec**
 
 If no standard spec exists but the integration is generic:
-```
--- greenhouse-ats.allium (library spec)
--- Specifies: Greenhouse webhook events, candidate sync, etc.
-
--- interview-scheduling.allium (application spec)
-use "./greenhouse-ats.allium" as greenhouse
-
-rule ImportCandidate {
-    when: greenhouse/CandidateCreated(data)
-    ensures: Candidacy.created(...)
-}
+```tla
+\* Compose with library modules via EXTENDS and module instantiation.
+EXTENDS Naturals, Sequences
 ```
 
 **Option 3: Abstract and move on**
 
 If the integration is minor, just abstract it:
-```
--- Don't specify Slack details, just:
-ensures: Notification.created(
-    to: interviewers,
-    channel: slack
-)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Red flags: integration logic in your spec
 
 If you find yourself writing spec like this, stop and reconsider:
 
-```
--- TOO DETAILED - this is Stripe's domain, not yours
-rule ProcessStripeWebhook {
-    when: WebhookReceived(payload, signature)
-
-    requires: verify_stripe_signature(payload, signature)
-
-    let event = parse_stripe_event(payload)
-
-    if event.type = "invoice.paid":
-        ...
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Instead:
-```
--- Application responds to payment events (integration handled elsewhere)
-rule PaymentReceived {
-    when: stripe/InvoicePaid(invoice)
-    ...
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Common library spec extractions
 
 | Code pattern found | Library spec candidate |
 |-------------------|----------------------|
-| OAuth token exchange, refresh, session management | `oauth2.allium` |
-| Stripe webhook handling, subscription lifecycle | `stripe-billing.allium` |
-| Email sending with templates, bounce handling | `email-delivery.allium` |
-| Calendar event sync, availability checking | `calendar-integration.allium` |
-| ATS candidate import, status sync | `greenhouse-ats.allium`, `lever-ats.allium` |
-| File upload, virus scanning, thumbnail generation | `file-storage.allium` |
+| OAuth token exchange, refresh, session management | `oauth2.tla` |
+| Stripe webhook handling, subscription lifecycle | `stripe-billing.tla` |
+| Email sending with templates, bounce handling | `email-delivery.tla` |
+| Calendar event sync, availability checking | `calendar-integration.tla` |
+| ATS candidate import, status sync | `greenhouse-ats.tla`, `lever-ats.tla` |
+| File upload, virus scanning, thumbnail generation | `file-storage.tla` |
 
 See patterns.md Pattern 8 for detailed examples of integrating library specs.
 
@@ -702,7 +639,7 @@ When you find two terms for the same concept (across specs, within a spec, or be
 ```
 -- BAD: Acknowledges duplication without resolving it
 -- Order vs Purchase
--- checkout.allium uses "Purchase" - these are equivalent concepts.
+-- checkout.tla uses "Purchase" - these are equivalent concepts.
 ```
 
 This is not a resolution. When different parts of a codebase are built against different specs, both terms end up in the implementation: duplicate models, redundant join tables, foreign keys pointing both ways.
@@ -739,14 +676,13 @@ The implicit states are:
 - `submitted`: feedback_id set
 
 Extract to explicit:
-```
-entity FeedbackRequest {
-    interview: Interview
-    interviewer: Interviewer
-    requested_at: Timestamp
-    reminded_at: Timestamp?
-    status: pending | reminded | submitted
-}
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
+
+EntityStates == {"absent", "active", "deleted"}
+
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 ### Challenge: Scattered logic
@@ -773,15 +709,12 @@ def process_acceptance(invitation, slot):
 ```
 
 Consolidate into one rule:
-```
-rule CandidateAccepts {
-    when: CandidateAccepts(invitation, slot)
-
-    requires: invitation.status = pending
-    requires: invitation.expires_at > now
-    requires: slot in invitation.slots
-    ...
-}
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 ### Challenge: Dead code and historical accidents
@@ -806,8 +739,12 @@ def send_notification(user, message):
 ```
 
 The spec should capture the intended behaviour, not the bug:
-```
-ensures: Notification.created(to: user, channel: slack)
+```tla
+RuleName ==
+    \E x \in Domain:
+        /\ Precondition(x)
+        /\ state' = [state EXCEPT ![x] = "updated"]
+        /\ UNCHANGED <<otherState>>
 ```
 
 Whether the current implementation properly handles failures is separate from what the system should do.
@@ -857,5 +794,5 @@ If any remain, ask: "Would a stakeholder include this in a requirements doc?"
 
 ## References
 
-- [Language reference](../../references/language-reference.md) — full Allium syntax
+- [Language reference](../../references/language-reference.md) — full TLA+ syntax
 - [Worked examples](./references/worked-examples.md) — complete code-to-spec examples in Python, TypeScript and Java
