@@ -273,6 +273,102 @@ lein run -e '(tlc2.TLC/main (into-array String ["-config" "specifications/passwo
 
 For day-to-day runs, start with: `-config`, `-workers auto`, `-deadlock` (only if intended), and in simulation `-seed` + `-depth` for reproducibility.
 
+## Temporal properties (beyond invariants)
+
+Use temporal formulas to check progress, not only shape/type safety.
+
+- Safety invariants:
+  - `TypeOK` in `INVARIANTS` (state predicate checked on every reachable state)
+  - `[]TypeOK` as a temporal property (equivalent intent, different TLC sectioning)
+  - Monotonicity safety (for example `[][clock' >= clock]_vars`)
+- Liveness/progress:
+  - Eventuality: `<>P`
+  - Leads-to: `P ~> Q`
+  - Recurrence: `[]<>P`
+  - Persistence eventually: `<>[]P`
+
+Good liveness properties are about something eventually happening (queues drain, pending items resolve), not only about variables never decreasing.
+
+## Fairness and liveness workflow
+
+Liveness checks are usually meaningless without fairness assumptions.
+
+```tla
+Spec == Init /\ [][Next]_vars
+
+FairSpec ==
+  Spec /\
+  WF_vars(ActionA) /\
+  WF_vars(ActionB)
+```
+
+Use weak fairness (`WF_vars`) for actions that should not be postponed forever when continuously enabled. Use strong fairness (`SF_vars`) only when an action can be enabled/disabled repeatedly and still must eventually occur.
+
+Recommended workflow:
+
+1. Safety run:
+   - `SPECIFICATION Spec`
+   - `INVARIANTS ...`
+   - optional safety `PROPERTIES` (for example `[]TypeOK`)
+2. Liveness run:
+   - `SPECIFICATION FairSpec`
+   - progress `PROPERTIES` (`<>`, `~>`, `[]<>`, `<>[]`)
+
+Keep deadlock checking enabled in safety runs unless you intentionally model terminal states.
+
+## State-space sizing and CONSTRAINTS
+
+When you need broad exploration (for example 1000+ or 2000+ distinct states), tune domains and constraints deliberately.
+
+```tla
+StateConstraint ==
+  /\ clock <= MaxClock
+  /\ Len(queue) <= MaxQueueLen
+```
+
+In cfg:
+
+```cfg
+CONSTRAINTS
+  StateConstraint
+```
+
+Guidelines:
+
+- Increase branch factors first (initial nondeterminism, queue shapes, finite domains), then depth bounds.
+- Use constraints to cap explosion, not to remove core behavior.
+- If a liveness property fails only under aggressive constraints, re-check with relaxed constraints to avoid artificial starvation.
+- Track TLC's reported distinct-state count and iterate bounds until model size is meaningful for the question.
+
+## Trace artifacts and output hygiene
+
+By default TLC can generate large TE/spec trace artifacts. Control this explicitly:
+
+- `-noGenerateSpecTE`: do not emit generated TE/spec artifacts.
+- `-teSpecOutDir <dir>`: redirect generated TE/spec artifacts to a dedicated directory.
+- `-dumpTrace <fmt> <file>`: capture counterexamples intentionally (`json`, `tla`, `dot`, etc).
+
+Practical pattern:
+
+```bash
+clojure -M -e '(tlc2.TLC/main (into-array String ["-config" "MySpec.cfg" "-workers" "auto" "-noGenerateSpecTE" "-teSpecOutDir" ".tlc-traces" "MySpec.tla"]))'
+```
+
+Ignore or clean trace output directories in VCS policy (`.gitignore`) to avoid noisy diffs.
+
+## Counterexample triage checklist
+
+When TLC fails:
+
+1. Identify failing class: invariant vs temporal property.
+2. Confirm scope: does failure occur under `Spec`, `FairSpec`, or both.
+3. Minimize quickly: shrink constants/queues while preserving the failure.
+4. Decide intent gap:
+   - spec bug (property too strong/wrong),
+   - model bug (action or guard incorrect),
+   - missing assumption (fairness or environment condition).
+5. Fix and re-run the full property set, not just the failed property.
+
 ## References
 
 - [Language reference](./references/language-reference.md) — syntax patterns, module structure, expressions and validation checks
