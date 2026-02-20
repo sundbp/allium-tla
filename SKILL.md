@@ -252,9 +252,13 @@ lein run -e '(tlc2.TLC/main (into-array String ["-config" "specifications/passwo
   - `-config <file>`: use explicit cfg (default is `SPEC.cfg`).
   - `-deadlock`: disables deadlock checking.
   - `-workers <num|auto>`: parallelism; `auto` uses available cores.
+  - `-lncheck <default|final|seqfinal|off>`: liveness-check scheduling strategy.
   - `-checkpoint <minutes>` / `-recover <id>`: checkpoint + recovery.
   - `-coverage <minutes>`: periodic coverage reporting.
   - `-continue`: continue after first invariant violation.
+- Performance/memory:
+  - `-maxSetSize <num>`: upper bound for set enumeration.
+  - `-fpmem <0..1>` and `-fpbits <num>`: fingerprint set memory/partition tuning.
 - Model checking:
   - `-dfid <num>`: iterative deepening DFS mode.
   - `-view`: apply VIEW when printing states.
@@ -289,6 +293,8 @@ Use temporal formulas to check progress, not only shape/type safety.
 
 Good liveness properties are about something eventually happening (queues drain, pending items resolve), not only about variables never decreasing.
 
+Important TLC behavior: a state-level formula under `PROPERTY/PROPERTIES` can be checked only in the initial state. Put state predicates under `INVARIANT`, or wrap as a temporal property (for example `[]P`) when that is the intent.
+
 ## Fairness and liveness workflow
 
 Liveness checks are usually meaningless without fairness assumptions.
@@ -316,14 +322,67 @@ Recommended workflow:
 
 Keep deadlock checking enabled in safety runs unless you intentionally model terminal states.
 
+## Temporal property examples (copy/paste starters)
+
+```tla
+Pending(r) == requestStatus[r] = "pending"
+Assigned(r) == assignee[r] # "none"
+Completed(r) == requestStatus[r] = "completed"
+
+EventuallyAssigned ==
+  \A r \in Requests : Pending(r) ~> Assigned(r)
+
+EventuallyCompleted ==
+  \A r \in Requests : Pending(r) ~> Completed(r)
+
+QueueDrainsInfinitelyOften ==
+  []<>(Len(workQueue) = 0)
+
+EventuallyStable ==
+  <>[](\A r \in Requests : requestStatus[r] # "pending")
+
+FairSpec ==
+  Spec /\
+  \A r \in Requests : WF_vars(Assign(r)) /\
+  \A r \in Requests : WF_vars(Complete(r))
+```
+
+```cfg
+SPECIFICATION FairSpec
+PROPERTIES
+  EventuallyAssigned
+  EventuallyCompleted
+  QueueDrainsInfinitelyOften
+  EventuallyStable
+```
+
 ## State-space sizing and CONSTRAINTS
 
 When you need broad exploration (for example 1000+ or 2000+ distinct states), tune domains and constraints deliberately.
+
+Hard rules for temporal checks:
+
+- Never use `SYMMETRY` in liveness/temporal runs. TLC source explicitly warns this can hide liveness violations.
+- Skill policy: do not include `SYMMETRY` in shared/reusable configs in this repository.
+- Avoid `CONSTRAINT`/`CONSTRAINTS` and `ACTION_CONSTRAINT` in liveness runs unless you have a proof they preserve the temporal property.
+- If you use `VIEW` as an abstraction, treat it as a proof obligation: verify that projected equivalence preserves the property you are checking.
+
+Model-shaping tactics that usually give the best reduction first:
+
+- Bound constants aggressively and grow one axis at a time (`Users`, `Requests`, queue lengths, retries).
+- Use model values for opaque identities/payloads instead of rich records/strings.
+- Keep only decision-relevant state in `VARIABLES`; compute derived data with operators.
+- Collapse domains to small enums (`"none" | "pending" | "done"`) before adding detail.
+- Reduce unnecessary interleavings by serializing irrelevant concurrency (for example explicit turn/scheduler variables when order is not semantically important).
+- Separate environment nondeterminism from system actions, then cap environment choice points first.
 
 ```tla
 StateConstraint ==
   /\ clock <= MaxClock
   /\ Len(queue) <= MaxQueueLen
+
+StepConstraint ==
+  actorTurn = "system"
 ```
 
 In cfg:
@@ -331,14 +390,18 @@ In cfg:
 ```cfg
 CONSTRAINTS
   StateConstraint
+
+ACTION_CONSTRAINT
+  StepConstraint
 ```
 
 Guidelines:
 
-- Increase branch factors first (initial nondeterminism, queue shapes, finite domains), then depth bounds.
-- Use constraints to cap explosion, not to remove core behavior.
-- If a liveness property fails only under aggressive constraints, re-check with relaxed constraints to avoid artificial starvation.
-- Track TLC's reported distinct-state count and iterate bounds until model size is meaningful for the question.
+- For safety-only sizing runs, constraints are useful to find bugs quickly.
+- For liveness sign-off, run a second profile with no `SYMMETRY`, no state/action constraints, and explicit fairness.
+- Use simulation early (`-simulate`, fixed `-seed`, tuned `-depth`) to find obvious bugs before full graph construction.
+- Use `-lncheck final` (or `seqfinal`) to reduce repeated liveness SCC checks during long safety exploration.
+- Track TLC's distinct-state count and growth rate at each constant bump; stop increasing a dimension that does not increase behavior coverage.
 
 ## Trace artifacts and output hygiene
 
@@ -374,3 +437,6 @@ When TLC fails:
 - [Language reference](./references/language-reference.md) — syntax patterns, module structure, expressions and validation checks
 - [Test generation](./references/test-generation.md) — generating tests from specifications
 - [Patterns](./references/patterns.md) — 8 worked patterns: auth, RBAC, invitations, soft delete, notifications, usage limits, comments, library spec integration
+- [TLC model config (SYMMETRY, CONSTRAINTS, PROPERTIES)](https://github.com/tlaplus/tlaplus/wiki/The-config-file)
+- [TLC warning text for liveness + symmetry/constraints](https://github.com/tlaplus/tlaplus/blob/master/tlatools/org.lamport.tlatools/src/tlc2/output/MP.java)
+- [TLC checker initialization (symmetry warning path)](https://github.com/tlaplus/tlaplus/blob/master/tlatools/org.lamport.tlatools/src/tlc2/tool/AbstractChecker.java)
