@@ -198,6 +198,81 @@ ASSUME DeferredOperator \in [Nat -> Values]
 \* Open question: confirm desired policy and encode as invariant/action guard.
 ```
 
+## Running TLC from Clojure (Recife)
+
+TLC is the Java entrypoint `tlc2.TLC` from the TLA+ tools. With Recife, it is available transitively via `pfeodrippe/tla-edn`.
+
+### Resolve Recife version (Clojars latest + fallback)
+
+```bash
+RECIFE_VERSION="$(curl -fsSL 'https://clojars.org/api/artifacts/pfeodrippe/recife' | sed -n 's/.*"latest_version":"\([^"]*\)".*/\1/p')"
+RECIFE_VERSION="${RECIFE_VERSION:-0.22.0}"
+echo "$RECIFE_VERSION"
+```
+
+Fallback tested version in this repo: `0.22.0`.
+
+### deps.edn
+
+```clojure
+{:deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        pfeodrippe/recife {:mvn/version "0.22.0"}}}
+```
+
+```bash
+# TLC help
+clojure -M -e '(tlc2.TLC/main (into-array String ["-help"]))'
+
+# Run a spec + cfg (random simulation)
+clojure -M -e '(tlc2.TLC/main (into-array String ["-config" "specifications/password-auth/PasswordAuth.cfg" "-simulate" "num=5" "specifications/password-auth/PasswordAuth.tla"]))'
+```
+
+Use `-e` with interop, not `-m tlc2.TLC` (`-m` expects a Clojure namespace, not a Java class).
+
+### project.clj (Lein fallback)
+
+```clojure
+(defproject recife-tlc-runner "0.1.0-SNAPSHOT"
+  :dependencies [[org.clojure/clojure "1.11.1"]
+                 [pfeodrippe/recife "0.22.0"]]
+  :main clojure.main)
+```
+
+```bash
+# TLC help
+lein run -e '(tlc2.TLC/main (into-array String ["-help"]))'
+
+# Run a spec + cfg (from repo root)
+lein run -e '(tlc2.TLC/main (into-array String ["-config" "specifications/password-auth/PasswordAuth.cfg" "-simulate" "num=5" "specifications/password-auth/PasswordAuth.tla"]))'
+```
+
+### TLC flag hints (from TLAPLUS `tlc2/TLC.java`)
+
+- Core:
+  - `-config <file>`: use explicit cfg (default is `SPEC.cfg`).
+  - `-deadlock`: disables deadlock checking.
+  - `-workers <num|auto>`: parallelism; `auto` uses available cores.
+  - `-checkpoint <minutes>` / `-recover <id>`: checkpoint + recovery.
+  - `-coverage <minutes>`: periodic coverage reporting.
+  - `-continue`: continue after first invariant violation.
+- Model checking:
+  - `-dfid <num>`: iterative deepening DFS mode.
+  - `-view`: apply VIEW when printing states.
+- Simulation:
+  - `-simulate`: simulation mode.
+  - `-depth <num>`: max trace depth (default 100).
+  - `-seed <num>` and `-aril <num>`: reproducibility controls.
+  - `-simulate` accepts comma args parsed by TLC: `num=<N>`, `file=<prefix>`, `stats=basic|full`, `sched=rl|rlaction`.
+- Trace/state output:
+  - `-dump <file>` or `-dump dot[,colorize,actionlabels,constrained] <file>`: write reachable states / DOT graph.
+  - `-dumpTrace <fmt> <file>`: dump counterexample traces (`tla`, `json`, `tlc`, `tlcplain`, `tlcaction`, `dot`, `tlcTESpec`).
+  - `-postCondition <Module!Operator>`: evaluate constant-level operator after exploration.
+- Tooling:
+  - `-tool`: machine-readable message-coded output.
+  - `-debugger [nosuspend,nohalt,port=4712]`: debugger mode (`-workers 1` implied).
+
+For day-to-day runs, start with: `-config`, `-workers auto`, `-deadlock` (only if intended), and in simulation `-seed` + `-depth` for reproducibility.
+
 ## References
 
 - [Language reference](./references/language-reference.md) — syntax patterns, module structure, expressions and validation checks
