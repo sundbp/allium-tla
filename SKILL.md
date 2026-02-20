@@ -57,119 +57,115 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 
 ### Value type
 
-```
-value TimeRange { start: Timestamp, end: Timestamp, duration: end - start }
+```tla
+TimeRange(start, end) ==
+    [start |-> start, end |-> end, duration |-> end - start]
 ```
 
 ### Sum type
 
-A base entity declares a discriminator field whose capitalised values name the variants. Variants use the `variant` keyword.
+A tagged union in TLA+ is modeled with a discriminator function plus per-kind payload functions.
 
 ```tla
-CONSTANTS Entities
-VARIABLES entityStatus
+NotificationKinds == {"none", "mention", "reply", "share"}
+VARIABLES notificationKind, mentionComment
 
-EntityStates == {"absent", "active", "deleted"}
-
-TypeOK == entityStatus \in [Entities -> EntityStates]
+IsMention(n) == notificationKind[n] = "mention"
 ```
 
-Lowercase pipe values are enum literals (`status: pending | active`). Capitalised values are variant references (`kind: Branch | Leaf`). Type guards (`requires:` or `if` branches) narrow to a variant and unlock its fields.
+Use finite sets for enums (for example `{"pending", "active"}`) and guard actions with predicates (`IsMention(n)`).
 
 ### Module given
 
-Declares the entity instances a module's rules operate on. All rules inherit these bindings. Not every module needs one: rules scoped by triggers on domain entities get their entities from the trigger. `given` is for specs where rules operate on shared instances that exist once per module scope.
+Module scope in TLA+ is expressed with `CONSTANTS` and `VARIABLES`. Constants define the domain, variables define mutable state.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+CONSTANTS Users, Workspaces
+VARIABLES membershipRole, outbox
 ```
 
-Imported module instances are accessed via qualified names (`scheduling/calendar`) and do not appear in the local `given` block. Distinct from surface `context`, which binds a parametric scope for a boundary contract.
+Module composition uses `INSTANCE` and shared constants/variables.
 
 ### Rule
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+AddMember ==
+    \E actor \in Users, workspace \in Workspaces, newUser \in Users:
+        /\ membershipRole[workspace][actor] = "admin"
+        /\ membershipRole[workspace][newUser] = "none"
+        /\ membershipRole' = [membershipRole EXCEPT ![workspace][newUser] = "member"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Trigger types
 
-- **External stimulus**: `when: CandidateSelectsSlot(invitation, slot)` — action from outside the system
-- **State transition**: `when: interview: Interview.status transitions_to scheduled` — entity changed state (transition only, not creation)
-- **State becomes**: `when: interview: Interview.status becomes scheduled` — entity has this value, whether by creation or transition
-- **Temporal**: `when: invitation: Invitation.expires_at <= now` — time-based condition (always add a `requires` guard against re-firing)
-- **Derived condition**: `when: interview: Interview.all_feedback_in` — derived value becomes true
-- **Entity creation**: `when: batch: DigestBatch.created` — fires when a new entity is created
-- **Chained**: `when: AllConfirmationsResolved(candidacy)` — subscribes to a trigger emission from another rule's ensures clause
+- **External stimulus**: action includes external parameters (`\E req \in Requests: ...`)
+- **State transition**: guard on old state and assign a new state (`status[x] = "pending"` then `status' = ...`)
+- **Time-driven**: guard against `now` (`expiresAt[token] <= now`)
+- **Derived condition**: guard by predicate (`CanAdmin(actor, workspace)`)
+- **Creation**: transition from `"absent"` to active state
+- **Chained workflow**: append an event to `outbox` and consume it in a later action
 
-All entity-scoped triggers use explicit `var: Type` binding. Use `_` as a discard binding where the name is not needed: `when: _: Invitation.expires_at <= now`, `when: SomeEvent(_, slot)`.
+Use existential bindings (`\E x \in Domain`) for all trigger parameters.
 
 ### Rule-level iteration
 
-A `for` clause applies the rule body once per element in a collection:
+Iteration is expressed with function/set comprehensions:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+MarkAllAsRead ==
+    \E user \in Users:
+        /\ notificationStatus' = [n \in Notifications |->
+                                  IF notificationUser[n] = user /\ notificationStatus[n] = "unread"
+                                  THEN "read"
+                                  ELSE notificationStatus[n]]
+        /\ UNCHANGED <<notificationUser>>
 ```
 
 ### Ensures patterns
 
-Ensures clauses have four outcome forms:
+Action outcomes are represented directly in primed state:
 
-- **State changes**: `entity.field = value`
-- **Entity creation**: `Entity.created(...)` — the single canonical creation verb
-- **Trigger emission**: `TriggerName(params)` — emits an event for other rules to chain from
-- **Entity removal**: `not exists entity` — asserts the entity no longer exists
+- **State changes**: function update with `EXCEPT`
+- **Creation**: move from `"absent"` to an active status
+- **Event emission**: append to an event/outbox sequence
+- **Removal**: move to `"absent"`/`"deleted"` or remove from a set
 
-These forms compose with `for` iteration (`for x in collection: ...`), `if`/`else` conditionals and `let` bindings.
+These compose with `IF/THEN/ELSE`, `LET/IN`, set operators, and comprehensions.
 
-Entity creation uses `.created()` exclusively. Domain meaning lives in entity names and rule names, not in creation verbs.
-
-In state change assignments, the right-hand expression references pre-rule field values. Conditions within ensures blocks (`if` guards, creation parameters, trigger emission parameters) reference the resulting state.
+In `state'` assignments, right-hand values read pre-state unless explicitly derived from primed expressions in the same action.
 
 ### Surface
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) == actor \in Actors /\ resource \in Resources /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
-Surfaces define contracts at boundaries. The `facing` clause names the external party, `context` scopes the entity. The remaining clauses use a single vocabulary regardless of whether the boundary is user-facing or code-to-code: `exposes` (visible data, supports `for` iteration over collections), `provides` (available operations with optional when-guards), `guarantee` (constraints that must hold), `guidance` (non-normative advice), `related` (associated surfaces reachable from this one), `timeout` (references to temporal rules that apply within the surface's context).
+Boundary contracts are modeled as predicates/actions plus invariants over visible state.
 
-The `facing` clause accepts either an actor type (with a corresponding `actor` declaration and `identified_by` mapping) or an entity type directly. Use actor declarations when the boundary has specific identity requirements; use entity types when any instance can interact (e.g., `facing visitor: User`). For integration surfaces where the external party is code, declare an actor type with a minimal `identified_by` expression. Actors that reference `within` in their `identified_by` expression must declare the expected context type: `within: Workspace`.
+Actor restrictions are encoded as guard predicates (`CanAct`, `CanAdmin`, etc.).
 
 ### Surface-to-implementation contract
 
-The `exposes` block is the field-level contract: the implementation returns exactly these fields, the consumer uses exactly these fields. Do not add fields not listed. Do not omit fields that are listed.
+The contract lives in action predicates and invariants: the implementation must preserve all declared invariants and perform only allowed transitions.
 
 ### Expressions
 
-Navigation: `interview.candidacy.candidate.email`, `reply_to?.author` (optional), `timezone ?? "UTC"` (null coalescing). Collections: `slots.count`, `slot in invitation.slots`, `interviewers.any(i => i.can_solo)`, `for item in collection: item.status = cancelled`, `permissions + inherited` (set union), `old - new` (set difference). Comparisons: `status = pending`, `count >= 2`, `status in {confirmed, declined}`, `provider not in providers`. Boolean logic: `a and b`, `a or b`, `not a`.
+Functions and records (`userEmail[user]`, `record.field`), sets (`x \in S`, `S \union T`, `S \\ T`), arithmetic/comparison (`count >= 2`), and boolean logic (`/\`, `\/`, `~`) are the core expression tools.
 
 ### Modular specs
 
-```
-use "github.com/tla-specs/google-oauth/abc123def" as oauth
+```tla
+INSTANCE OAuth WITH Users <- Users, Sessions <- Sessions
 ```
 
-Qualified names reference entities across specs: `oauth/Session`. Coordinates are immutable (git SHAs or content hashes). Local specs use relative paths: `use "./candidacy.tla" as candidacy`.
+Imported modules are referenced through the instance name and shared operators/constants.
 
 ### Config
 
@@ -179,12 +175,14 @@ ASSUME RESET_TOKEN_EXPIRY \in Nat
 ASSUME MAX_LOGIN_ATTEMPTS \in Nat
 ```
 
-Rules reference config values as `config.invitation_expiry`. For default entity instances, use `default`.
+Actions reference these constants directly (for example `tokenExpiresAt[token] = now + RESET_TOKEN_EXPIRY`).
 
 ### Defaults
 
-```
-default Role viewer = { name: "viewer", permissions: { "documents.read" } }
+```tla
+DefaultRolePermissions ==
+    [viewer |-> {"documents.read"},
+     editor |-> {"documents.read", "documents.write"}]
 ```
 
 ### Deferred specs
@@ -202,6 +200,6 @@ ASSUME DeferredOperator \in [Nat -> Values]
 
 ## References
 
-- [Language reference](./references/language-reference.md) — full syntax for entities, rules, expressions, surfaces and validation
+- [Language reference](./references/language-reference.md) — syntax patterns, module structure, expressions and validation checks
 - [Test generation](./references/test-generation.md) — generating tests from specifications
 - [Patterns](./references/patterns.md) — 8 worked patterns: auth, RBAC, invitations, soft delete, notifications, usage limits, comments, library spec integration

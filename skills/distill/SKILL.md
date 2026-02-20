@@ -140,11 +140,11 @@ def send_invitation(candidate_id: int, slot_ids: List[int]) -> Invitation:
 ```
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 What we dropped:
@@ -175,10 +175,10 @@ For every detail in the code, ask:
 
 | Means (code) | Ends (spec) |
 |--------------|-------------|
-| `requests.post('https://slack.com/api/...')` | `Notification.created(channel: slack)` |
+| `requests.post('https://slack.com/api/...')` | `outbox' = Append(outbox, [channel |-> "slack", ...])` |
 | `candidate.oauth_token = google.exchange(code)` | `Candidate authenticated` |
-| `redis.setex(f'session:{id}', 86400, data)` | `Session.created(expires: 24.hours)` |
-| `for slot in slots: slot.status = 'cancelled'` | `for s in slots: s.status = cancelled` |
+| `redis.setex(f'session:{id}', 86400, data)` | `sessionExpiresAt' = [sessionExpiresAt EXCEPT ![session] = now + 86400]` |
+| `for slot in slots: slot.status = 'cancelled'` | `slotStatus' = [s \in Slots |-> IF s \in slots THEN "cancelled" ELSE slotStatus[s]]` |
 
 ## The concrete detail problem
 
@@ -380,24 +380,24 @@ def accept_invitation(invitation_id: int, slot_id: int):
 
 Extract:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Key extraction patterns:**
 
 | Code pattern | Spec pattern |
 |--------------|--------------|
-| `if x.status != 'pending': raise` | `requires: x.status = pending` |
-| `if x.expires_at < now: raise` | `requires: x.expires_at > now` |
-| `if item not in collection: raise` | `requires: item in collection` |
-| `x.status = 'accepted'` | `ensures: x.status = accepted` |
-| `Model.create(...)` | `ensures: Model.created(...)` |
-| `send_email(...)` | `ensures: Email.created(...)` |
-| `notify(...)` | `ensures: Notification.created(...)` |
+| `if x.status != 'pending': raise` | Guard: `/\ xStatus[x] = "pending"` |
+| `if x.expires_at < now: raise` | Guard: `/\ xExpiresAt[x] > now` |
+| `if item not in collection: raise` | Guard: `/\ item \in collection` |
+| `x.status = 'accepted'` | `xStatus' = [xStatus EXCEPT ![x] = "accepted"]` |
+| `Model.create(...)` | `modelStatus' = [modelStatus EXCEPT ![m] = "active"]` |
+| `send_email(...)` | `outbox' = Append(outbox, [kind |-> "email", ...])` |
+| `notify(...)` | `outbox' = Append(outbox, [kind |-> "notification", ...])` |
 
 ### Step 4: Find temporal triggers
 
@@ -434,11 +434,11 @@ def send_reminders():
 
 Extract:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Step 5: Identify external boundaries
@@ -589,11 +589,11 @@ EXTENDS Naturals, Sequences
 
 If the integration is minor, just abstract it:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Red flags: integration logic in your spec
@@ -601,20 +601,20 @@ RuleName ==
 If you find yourself writing spec like this, stop and reconsider:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Instead:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Common library spec extractions
@@ -710,11 +710,11 @@ def process_acceptance(invitation, slot):
 
 Consolidate into one rule:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Challenge: Dead code and historical accidents
@@ -740,11 +740,11 @@ def send_notification(user, message):
 
 The spec should capture the intended behaviour, not the bug:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Whether the current implementation properly handles failures is separate from what the system should do.
@@ -766,7 +766,7 @@ public class SlackNotificationStrategy implements NotificationStrategy {
 }
 ```
 
-Cut through to the actual behaviour. The spec does not need strategy patterns, dependency injection or abstract factories. Just: `ensures: Notification.created(channel: slack, ...)`
+Cut through to the actual behaviour. The spec does not need strategy patterns, dependency injection or abstract factories. Just model the resulting state/event transition (for example, appending a Slack notification record to an outbox).
 
 ## Checklist: Have you abstracted enough?
 

@@ -21,10 +21,7 @@ A language for sharpening intent alongside implementation. [tlapl.us](https://tl
 npx skills add <owner/repo-or-local-path>
 ```
 
-Once installed, type `/tla` to get started. TLA+ examines your project and offers to distill from existing code or build a new spec through conversation. You can also jump straight to a specific mode:
-
-- `/tla:elicit` — build a spec through structured conversation with stakeholders
-- `/tla:distill` — extract a spec from existing code
+Once installed, invoke the `tla` skill in your tool to get started. TLA+ examines your project and offers to distill from existing code or build a new spec through conversation.
 
 Jump to what [TLA+ looks like in practice](#what-this-looks-like-in-practice).
 
@@ -68,11 +65,17 @@ TLA+ applies the same pattern. Code excels at expressing *how*; behavioural mode
 TLA+ provides a minimal syntax for describing events with their preconditions and the outcomes that result. The language deliberately excludes implementation details such as database schemas and API designs, focusing purely on observable behaviour.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+\* excerpt: specifications/password-auth/PasswordAuth.tla
+RequestPasswordReset ==
+    \E email \in Emails, token \in Tokens:
+        /\ UserExists(email)
+        /\ userStatus[email] \in {"active", "locked"}
+        /\ tokenStatus[token] = "absent"
+        /\ tokenStatus' = [t \in Tokens |->
+                           IF t = token THEN "pending"
+                           ELSE IF tokenUser[t] = email /\ tokenStatus[t] = "pending"
+                                THEN "expired"
+                                ELSE tokenStatus[t]]
 ```
 
 This rule captures observable behaviour: when a password reset is requested, if the email matches an active or locked account, existing tokens are invalidated, a new token is created and an email is sent. It says nothing about which database stores the token or which service sends the email, because those decisions belong to implementation.
@@ -80,19 +83,31 @@ This rule captures observable behaviour: when a password reset is requested, if 
 The same syntax works whether you're capturing infrastructure contracts or operational policy. A circuit breaker specification describes behaviour that typically lives in library defaults, Grafana alerts and architecture docs, never in any formal specification:
 
 ```tla
-CONSTANTS Entities
-VARIABLES entityStatus
-
-EntityStates == {"absent", "active", "deleted"}
-
-TypeOK == entityStatus \in [Entities -> EntityStates]
+\* excerpt: specifications/circuit-breaker/CircuitBreaker.tla
+CircuitOpens ==
+    \E breaker \in Breakers:
+        /\ breakerStatus[breaker] = "closed"
+        /\ IsTripped(breaker)
+        /\ breakerStatus' = [breakerStatus EXCEPT ![breaker] = "open"]
+        /\ openedAt' = [openedAt EXCEPT ![breaker] = now]
+        /\ UNCHANGED << now, recentFailures >>
 ```
 
 At the other end, an incident escalation rule captures operational policy that otherwise lives in runbooks, PagerDuty config and tribal knowledge, where drift between intent and implementation causes real damage:
 
 ```tla
-CONSTANT DeferredOperator
-ASSUME DeferredOperator \in [Nat -> Values]
+\* excerpt: specifications/incident-escalation/IncidentEscalation.tla
+IncidentEscalates ==
+    \E incident \in Incidents:
+        LET newLevel == escalationLevel[incident] + 1 IN
+        /\ incidentStatus[incident] \in {"open", "investigating"}
+        /\ declaredAt[incident] + slaTarget[incident] <= now
+        /\ escalationLevel' = [escalationLevel EXCEPT ![incident] = newLevel]
+        /\ onCallPages' = Append(onCallPages,
+                                [incident |-> incident,
+                                 team |-> EscalationPolicy[newLevel],
+                                 level |-> newLevel,
+                                 at |-> now])
 ```
 
 The [language reference](references/language-reference.md) covers entities, rules, triggers, relationships, projections, derived values, surfaces and actor declarations.

@@ -25,16 +25,16 @@ Indentation is significant. Blocks opened by a colon (`:`) after `for`, `if`, `e
 A `given` block declares the entity instances a module operates on. All rules in the module inherit these bindings.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Rules then reference `pipeline.status`, `calendar.available_slots`, etc. without ambiguity about what they refer to.
 
-Not every module needs a `given` block. Rules scoped by triggers on domain entities (e.g., `when: invitation: Invitation.expires_at <= now`) get their entities from the trigger binding. `given` is for specs where rules operate on shared instances that exist once per module scope, such as a pipeline, a catalog or a processing engine.
+Not every module needs a `given` block. Rules can bind their own domain values directly in action predicates (for example `\E invitation \in Invitations: invitationExpiresAt[invitation] <= now`). `given` is for specs where rules operate on shared instances that exist once per module scope, such as a pipeline, a catalog or a processing engine.
 
 `given` bindings must reference entity types declared in the same module or imported via `use`. Imported module instances are accessed via qualified names (`scheduling/calendar`) and do not need to appear in the local `given` block. Modules that operate only on imported instances may omit the `given` block entirely.
 
@@ -87,20 +87,12 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 
 Structured data without identity. No lifecycle, compared by value not reference. Use for concepts such as time ranges and addresses.
 
-```
-value TimeRange {
-    start: Timestamp
-    end: Timestamp
+```tla
+TimeRange(start, end) ==
+    [start |-> start, end |-> end, duration |-> end - start]
 
-    -- Derived
-    duration: end - start
-}
-
-value Location {
-    name: String
-    timezone: String
-    country: String?
-}
+Location(name, timezone, country) ==
+    [name |-> name, timezone |-> timezone, country |-> country]
 ```
 
 Value types have no identity, are immutable and are embedded within entities. Entities have identity, lifecycle and rules that govern them.
@@ -125,21 +117,21 @@ A sum type has three parts: a **discriminator field** whose type is a pipe-separ
 **Creating variant instances** — always via the variant name, not the base:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Type guards** narrow an entity to a specific variant, enabling access to its fields. They appear in `requires` clauses (guarding the entire rule) and `if` expressions (guarding a branch):
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Accessing variant-specific fields outside a type guard is an error. Sum types guarantee exhaustiveness (all variants declared upfront), mutual exclusivity (exactly one variant), type safety (variant fields only within guards) and automatic discrimination (set on creation).
@@ -147,11 +139,11 @@ Accessing variant-specific fields outside a type guard is an error. Sum types gu
 A `.created` trigger on the base entity fires when any variant is created. The bound variable holds the specific variant instance, and type guards can narrow it:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Use sum types when variants have fundamentally different data or behaviour. Do not use when simple status enums suffice or variants share most of their structure.
@@ -174,24 +166,24 @@ Primitive types have no properties or methods. For domain-specific string types 
 - `T?` — optional (may be absent)
 
 **Checking for absent values:**
-```
-requires: request.reminded_at = null      -- field is absent/unset
-requires: request.reminded_at != null     -- field has a value
+```tla
+/\ requestRemindedAt[request] = 0         \* field is absent/unset
+/\ requestRemindedAt[request] # 0         \* field has a value
 ```
 
 `null` represents the absence of a value for optional fields.
 
-`field = null` and `field != null` are presence checks, not comparisons. `field = null` is true when the field is absent; `field != null` is true when the field has a value. Comparisons with null produce false: `null <= now` is false, `null > 0` is false. Arithmetic with null produces null: `null + 1.day` is null. This means temporal triggers on optional fields (e.g., `when: user: User.next_digest_at <= now`) do not fire when the field is absent.
+`field = null` and `field != null` are presence checks, not comparisons. `field = null` is true when the field is absent; `field != null` is true when the field has a value. Comparisons with null produce false: `null <= now` is false, `null > 0` is false. Arithmetic with null produces null: `null + 1.day` is null. This means time-driven actions on optional fields (for example guards such as `nextDigestAt[user] <= now`) do not fire when the field is absent.
 
 **Enumerated types (inline):**
-```
-status: pending | confirmed | declined | expired
+```tla
+Status == {"pending", "confirmed", "declined", "expired"}
 ```
 
 **Named enumerations:**
-```
-enum Recommendation { strong_yes | yes | no | strong_no }
-enum DayOfWeek { monday | tuesday | wednesday | thursday | friday | saturday | sunday }
+```tla
+Recommendation == {"strong_yes", "yes", "no", "strong_no"}
+DayOfWeek == {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
 ```
 
 Named enumerations define a reusable set of values. Declare them in the Enumerations section of the file. Reference them as field types: `recommendation: Recommendation`. Inline enums (`status: pending | active`) are equivalent but anonymous; use named enums when the same set of values appears in multiple fields or entities.
@@ -281,11 +273,11 @@ Rules define behaviour: what happens when triggers occur.
 ### Rule structure
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 | Clause | Purpose |
@@ -303,11 +295,11 @@ Place `let` bindings where they make the rule most readable, typically just befo
 A `for` clause applies the rule body once per element in a collection. The binding variable is available in all subsequent clauses.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 The `where` keyword filters the collection, consistent with projection syntax. The indented body contains the rule's `let`, `requires` and `ensures` clauses scoped to each element.
@@ -320,87 +312,76 @@ When multiple rules share a trigger, their `requires` clauses determine which fi
 
 ### Trigger types
 
-**External stimulus** — action from outside the system:
-```
-when: AdminApprovesInterviewers(admin, suggestion, interviewers, times)
-when: CandidateSelectsSlot(invitation, slot)
-```
-
-**Optional parameters** use the `?` suffix:
-```
-when: InterviewerReportsNoInterview(interviewer, interview, reason, details?)
+**External stimulus** — action parameterized by external input:
+```tla
+AdminApprovesInterviewers ==
+    \E admin \in Users, suggestion \in Suggestions, interviewers \in SUBSET Users:
+        /\ CanApprove(admin, suggestion)
+        /\ suggestionApprovedBy' = [suggestionApprovedBy EXCEPT ![suggestion] = admin]
 ```
 
-**State transition** — entity changed state:
-```
-when: interview: Interview.status transitions_to scheduled
-when: confirmation: SlotConfirmation.status transitions_to confirmed
-```
-
-The variable before the colon binds the entity that triggered the transition. `transitions_to` fires when a field transitions to the specified value from a different value, not on initial entity creation (use `.created` for that). It is valid for enum fields, boolean fields and entity reference fields.
-
-**State becomes** — entity has a value, whether by creation or transition:
-```
-when: interview: Interview.status becomes scheduled
+**Optional parameters** are represented with sentinels or option sets:
+```tla
+NoInterviewDetails == {"none"} \union Details
 ```
 
-`becomes` fires both when an entity is created with the specified value and when a field transitions to that value from a different value. Like `transitions_to`, it is valid for enum fields, boolean fields and entity reference fields. It is equivalent to writing a `transitions_to` rule and a `.created` rule with a `requires` guard, combined into a single trigger. Use `becomes` when the rule should apply regardless of how the entity arrived at the state. Use `transitions_to` when the rule should only apply to transitions (e.g., sending a "rescheduled" notification that doesn't apply on initial creation).
+**State transition** — guard on current state and update to next state:
+```tla
+InterviewScheduled ==
+    \E interview \in Interviews:
+        /\ interviewStatus[interview] = "pending"
+        /\ interviewStatus' = [interviewStatus EXCEPT ![interview] = "scheduled"]
+```
+
+**State becomes** — combine creation and transition actions under one predicate:
+```tla
+BecomesScheduled(interview) ==
+    interviewStatus'[interview] = "scheduled"
+```
 
 **Temporal** — time-based condition:
-```
-when: invitation: Invitation.expires_at <= now
-when: interview: Interview.slot.time.start - 1.hour <= now
-when: request: FeedbackRequest.requested_at + 24.hours <= now
+```tla
+ExpireInvitation ==
+    \E invitation \in Invitations:
+        /\ invitationStatus[invitation] = "pending"
+        /\ invitationExpiresAt[invitation] <= now
+        /\ invitationStatus' = [invitationStatus EXCEPT ![invitation] = "expired"]
 ```
 
-Temporal triggers use explicit `var: Type` binding, the same as state transitions and entity creation. The binding names the entity instance and its type. Temporal triggers fire once when the condition becomes true. Always include a `requires` clause to prevent re-firing:
-```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
-```
+Time-driven actions should guard on current status to avoid repeated re-firing.
 
 **Derived condition becomes true:**
-```
-when: interview: Interview.all_feedback_in
-when: slot: InterviewSlot.is_valid
-```
-
-Derived condition triggers fire when the value transitions from false to true, the same semantics as temporal triggers. If the derived value could revert to false and become true again, include a `requires` clause to prevent re-firing, just as with temporal triggers.
-
-**Entity creation** — fires when a new entity is created:
-```
-when: batch: DigestBatch.created
-when: mention: CommentMention.created
+```tla
+AllFeedbackIn(interview) ==
+    FeedbackCount(interview) = RequiredFeedbackCount(interview)
 ```
 
-**Chained from another rule's trigger emission:**
-```
-when: AllConfirmationsResolved(candidacy)
-```
-
-A rule chains from another by subscribing to a trigger emission. The emitting rule includes the event in an ensures clause:
-
-```
-ensures: AllConfirmationsResolved(candidacy: candidacy)
+**Entity creation** — transition from absent to active:
+```tla
+CreateDigest ==
+    \E digest \in Digests:
+        /\ digestStatus[digest] = "absent"
+        /\ digestStatus' = [digestStatus EXCEPT ![digest] = "pending"]
 ```
 
-The receiving rule subscribes via its `when` clause. This uses the same syntax as external stimulus triggers, but the stimulus comes from another rule rather than from outside the system.
+**Chained from another rule's event emission:**
+```tla
+EmitAllConfirmationsResolved ==
+    outbox' = Append(outbox, [kind |-> "all_confirmations_resolved", candidacy |-> candidacy])
+```
+
+Downstream actions consume these event records from the outbox sequence.
 
 ### Preconditions (requires)
 
 Preconditions must be true for the rule to execute. If not met, the trigger is rejected.
 
-```
-requires: invitation.status = pending
-requires: not invitation.is_expired
-requires: slot in invitation.slots
-requires: interviewer in interview.interviewers
-requires:
-    interviewers.count >= 2
-    or interviewers.any(i => i.can_solo)
+```tla
+/\ invitationStatus[invitation] = "pending"
+/\ invitationExpiresAt[invitation] > now
+/\ slot \in invitationSlots[invitation]
+/\ interviewer \in interviewInterviewers[interview]
+/\ Cardinality(interviewers) >= 2 \/ HasSoloInterviewer(interviewers)
 ```
 
 **Precondition failure behaviour:**
@@ -410,23 +391,22 @@ requires:
 
 ### Local bindings (let)
 
-```
-let confirmation = SlotConfirmation{slot, interviewer}
-let time_until = interview.slot.time.start - now
-let is_urgent = time_until < 24.hours
-let is_modified =
-    interviewers != suggestion.suggested_interviewers
-    or proposed_times != suggestion.suggested_times
+```tla
+LET confirmation == ConfirmationFor(slot, interviewer)
+    timeUntil == interviewStartAt[interview] - now
+    isUrgent == timeUntil < 24
+    isModified == interviewers # suggestedInterviewers[suggestion]
+IN isUrgent \/ isModified
 ```
 
 ### Discard bindings
 
 Use `_` where a binding is required syntactically but the value is not needed. Multiple `_` bindings in the same scope do not conflict.
 
-```
-when: _: LogProcessor.last_flush_check + flush_timeout_hours <= now
-when: SomeEvent(_, slot)
-for _ in items: Counted(batch)
+```tla
+\* Bind and ignore values by not referencing them after binding.
+\E logProcessor \in LogProcessors:
+    /\ lastFlushCheck[logProcessor] + FLUSH_TIMEOUT <= now
 ```
 
 ### Postconditions (ensures)
@@ -438,11 +418,11 @@ In state change assignments (`entity.field = expression`), the expression on the
 Worked example: suppose `account.balance` is 100 before the rule fires.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 The assignment reads 100 (the pre-rule value). The `if` guard reads 150 (the resulting state after the assignment).
@@ -450,85 +430,80 @@ The assignment reads 100 (the pre-rule value). The `if` guard reads 150 (the res
 Common mistake: assuming `if` guards in ensures read pre-rule values. Suppose `order.status` is `pending` before the rule fires.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 The author likely meant "if the order was pending before we changed it". But the `if` guard inside ensures reads the resulting state, not the pre-rule state. To test pre-rule values, use a `let` binding or `requires` clause before the ensures block.
 
-Ensures clauses have four forms:
+Action blocks typically express four outcome forms:
 
-**State changes** — modify an existing entity's fields:
-```
-ensures: slot.status = booked
-ensures: invitation.status = accepted
-ensures: candidacy.retry_count = candidacy.retry_count + 1
-ensures: user.locked_until = null              -- clearing an optional field
-```
-
-Setting an optional field to `null` asserts the field becomes absent. Only valid for fields typed as optional (`T?`).
-
-**Entity creation** — create a new entity using `.created()`:
+**State changes** — modify existing state functions:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+slotStatus' = [slotStatus EXCEPT ![slot] = "booked"]
+invitationStatus' = [invitationStatus EXCEPT ![invitation] = "accepted"]
+retryCount' = [retryCount EXCEPT ![candidacy] = retryCount[candidacy] + 1]
+lockedUntil' = [lockedUntil EXCEPT ![user] = 0]
 ```
 
-Entity creation uses `.created()` exclusively. Domain meaning lives in entity names and rule names, not in creation verbs. `Email.created(...)` not `Email.sent(...)`.
+Optional values are usually represented with sentinels (for example `0` or `"none"`) or separate presence predicates.
 
-When creating entities that need to be referenced later in the same ensures block, use explicit `let` binding:
+**Entity creation** — transition from absent to active:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+CreateEmail ==
+    \E email \in Emails:
+        /\ emailStatus[email] = "absent"
+        /\ emailStatus' = [emailStatus EXCEPT ![email] = "pending"]
+        /\ emailTo' = [emailTo EXCEPT ![email] = userEmail[user]]
 ```
 
-A `let` binding within an ensures block is visible to all subsequent statements in that block, including nested `for` loops. It does not leak outside the ensures block.
-
-**Trigger emission** — emit a named event that other rules can chain from:
-```
-ensures: CandidateInformed(
-    candidate: candidacy.candidate,
-    about: slot_unavailable,
-    data: { available_alternatives: remaining_slots }
-)
-
-ensures: UserMentioned(user: mention.user, comment: comment, mentioned_by: author)
-ensures: FeatureUsed(workspace: workspace, feature: feature, by: user)
+When you need intermediate values inside one action, use `LET ... IN`:
+```tla
+CreateDigest ==
+    \E user \in Users:
+        LET pending == PendingNotifications(user) IN
+        /\ pending # {}
+        /\ digestItems' = [digestItems EXCEPT ![user] = pending]
 ```
 
-Trigger emissions are observable outcomes, not entity creation. They have no `.created()` call and are referenced by other rules' `when` clauses. Parameter values follow normal expression resolution: bound names are resolved first, then enum literals if the parameter has a declared type on the receiving rule. Bare identifiers that resolve to neither a binding nor an enum literal are a checker warning.
+`LET` bindings are local to the enclosing expression/action.
+
+**Event emission** — append records to an event/outbox sequence:
+```tla
+outbox' = Append(outbox,
+                 [kind |-> "candidate_informed",
+                  candidate |-> candidate,
+                  about |-> "slot_unavailable"])
+```
+
+Events are observable outcomes consumed by downstream actions.
 
 **Entity removal:**
-```
-ensures: not exists target_membership
-ensures: not exists CommentMention{comment, user}
+```tla
+membershipStatus' = [membershipStatus EXCEPT ![targetMembership] = "absent"]
+commentMentions' = commentMentions \ {<<comment, user>>}
 ```
 
 See [Existence](#existence) in the expression language for the full syntax including bulk removal and the distinction from soft delete.
 
 **Bulk updates:**
-```
-ensures:
-    for s in invitation.proposed_slots:
-        s.status = cancelled
+```tla
+slotStatus' = [s \in Slots |->
+               IF s \in invitationProposedSlots[invitation]
+               THEN "cancelled"
+               ELSE slotStatus[s]]
 ```
 
 **Conditional outcomes:**
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ---
@@ -538,11 +513,11 @@ RuleName ==
 ### Navigation
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 `this` refers to the instance of the enclosing type. It is valid in two contexts:
@@ -564,11 +539,11 @@ Curly braces with field names look up the specific instance where those fields m
 When the local variable name differs from the field name, use the explicit form:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Collection operations
@@ -648,11 +623,11 @@ not (a or b)  -- equivalent to: not a and not b
 ### Conditional expressions
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 Both forms use the same `if condition: ... else: ...` syntax. The inline form is for single-value assignments only. If either branch needs multiple statements or entity creation, use block form. Omit `else` when only the true branch has an effect.
@@ -672,11 +647,11 @@ Each `else if` adds a branch. The final `else` provides a fallback.
 `exists` can also be used as a condition in `if` expressions, not just in `requires`. When `exists x` is used as an `if` condition, `x` is guaranteed non-null within the `if` body and can be accessed safely:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Existence
@@ -764,13 +739,16 @@ Because `with` defines a relationship from the universe of all instances, it nee
 - **`where`** appears in projections, iteration, surface context, actor identification and surface `let` bindings. The predicate filters an existing collection and must not reference `this`.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 Both `with` and `where` predicates support the same expression language as `requires` clauses: field navigation (including chained), comparisons, arithmetic, boolean combinators (`and`, `or`, `not`), bare boolean expressions and `in` for set membership. `where notification_setting.digest_enabled` and `where notification_setting.digest_enabled = true` are equivalent.
@@ -836,9 +814,9 @@ ASSUME MAX_LOGIN_ATTEMPTS \in Nat
 
 Rules reference config values with dot notation:
 
-```
-requires: length(password) >= config.min_password_length
-ensures: token.expires_at = now + config.reset_token_expiry
+```tla
+/\ PasswordLength(password) >= MIN_PASSWORD_LENGTH
+/\ tokenExpiresAt' = [tokenExpiresAt EXCEPT ![token] = now + RESET_TOKEN_EXPIRY]
 ```
 
 External specs declare their own config blocks. Consuming specs configure them via the qualified name:
@@ -850,27 +828,21 @@ EXTENDS Naturals, Sequences
 
 External config values are referenced as `oauth/config.session_duration`.
 
-For default entity instances (seed data, base configurations), use `default` declarations.
+For default seed data, use constants or initialized mappings.
 
 ---
 
 ## Defaults
 
-Default declarations create named entity instances that exist unconditionally. They are available to all rules and surfaces without requiring creation by any rule.
+Default values are represented in constants or in `Init`.
 
-```
-default InterviewType all_in_one = { name: "All in one", duration: 75.minutes }
+```tla
+DefaultInterviewTypeDurations ==
+    [all_in_one |-> 75]
 
-default Role viewer = {
-    name: "viewer",
-    permissions: { "documents.read" }
-}
-
-default Role editor = {
-    name: "editor",
-    permissions: { "documents.write" },
-    inherits_from: viewer
-}
+DefaultRolePermissions ==
+    [viewer |-> {"documents.read"},
+     editor |-> {"documents.write", "documents.read"}]
 ```
 
 ---
@@ -906,11 +878,11 @@ Coordinates are immutable references (git SHAs or content hashes), not version n
 External specs' entities are used directly with qualified names:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Responding to external triggers
@@ -918,11 +890,11 @@ RuleName ==
 Any trigger or state transition from another spec can be responded to. No extension points need to be declared:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Configuration
@@ -968,13 +940,16 @@ Surfaces do not specify implementation details (database schemas, wire protocols
 When a surface has a specific external party, declare actor types:
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 The `identified_by` expression specifies the entity type and condition that identifies the actor. It takes the form `EntityType where condition`, where the condition uses the entity's own fields, derived values and relationships. When an actor type is used in a `facing` clause, the binding variable has the entity type from the actor's `identified_by` expression. For example, `facing viewer: Interviewer` where `Interviewer` has `identified_by: User where role = interviewer` binds `viewer` as type `User`.
@@ -982,13 +957,16 @@ The `identified_by` expression specifies the entity type and condition that iden
 When an actor's identity depends on a context that varies per surface, declare the expected context type with a `within` clause and reference it in `identified_by`:
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 The `within` clause declares the entity type this actor requires from the surface's `context` binding. This makes the dependency explicit: the checker can verify that any surface using this actor provides a compatible context.
@@ -999,13 +977,16 @@ Two keywords are available inside `identified_by`:
 - `within` — the entity bound by the `context` clause of the surface that uses this actor, constrained to the type declared in the actor's `within` clause.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 An actor declaration with a `within` clause can only be used in surfaces that declare a `context` clause. The surface's context type must match the actor's declared `within` type.
@@ -1015,13 +996,16 @@ The `facing` clause accepts either an actor type or an entity type directly. Use
 ### Surface structure
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 Variable names (`party`, `item`) are user-chosen, not reserved keywords. All clauses are optional.
@@ -1041,35 +1025,44 @@ Variable names (`party`, `item`) are user-chosen, not reserved keywords. All cla
 ### Examples
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 **Timeout example** — a `timeout` clause references an existing temporal rule by name and binds it to the surface's context. The rule name must correspond to a rule with a temporal trigger defined elsewhere in the spec. The `when` condition is optional: include it to restate the temporal expression for readability, or omit it when the rule name is self-explanatory. When present, the checker verifies the `when` condition matches the referenced rule's trigger.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 The rule name alone is sufficient when the temporal condition is clear from the rule's name:
@@ -1111,7 +1104,7 @@ A valid TLA+ specification must satisfy:
 15. Sum type discriminators use the pipe syntax with capitalised variant names (`A | B | C`)
 16. All names in a discriminator field must be declared as `variant X : BaseEntity`
 17. All variants that extend a base entity must be listed in that entity's discriminator field
-18. Variant-specific fields are only accessed within type guards (`requires:` or `if` branches)
+18. Variant-specific fields are only accessed within explicit guard predicates (`IF` branches or dedicated guard operators)
 19. Base entities with sum type discriminators cannot be instantiated directly
 20. Discriminator field names are user-defined (e.g., `kind`, `node_type`), no reserved name
 21. The `variant` keyword is required for variant declarations
@@ -1171,21 +1164,21 @@ let request = FeedbackRequest{interview, interviewer}
 ```
 
 **UI/UX in spec:**
-```
--- Bad
-ensures: Button.displayed(label: "Confirm", onClick: ...)
+```tla
+\* Bad: UI rendering as domain behavior
+buttonVisible' = TRUE
 
--- Good
-ensures: CandidateInformed(about: options_available, data: { slots: slots })
+\* Good: domain event/state outcome
+outbox' = Append(outbox, [kind |-> "candidate_informed", about |-> "options_available"])
 ```
 
 **Algorithm in rules:**
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Queries in rules:**
@@ -1208,42 +1201,43 @@ interviewers.any(i => i.can_solo)
 
 **Missing temporal guards:**
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Overly broad status enums:**
-```
--- Bad
-status: draft | pending | active | paused | resumed | completed |
-        cancelled | expired | archived | deleted
+```tla
+\* Bad
+TaskStatus == {"draft", "pending", "active", "paused", "resumed",
+               "completed", "cancelled", "expired", "archived", "deleted"}
 
--- Good
-status: pending | active | completed | cancelled
-is_archived: Boolean
+\* Good
+TaskStatus == {"pending", "active", "completed", "cancelled"}
+taskArchived \in BOOLEAN
 ```
 
 **`transitions_to` doesn't fire on creation:**
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Magic numbers in rules:**
-```
--- Bad
-requires: attempts < 3
-ensures: deadline = now + 48.hours
+```tla
+\* Bad
+attempts < 3
+deadline' = now + 48
 
--- Good
-requires: attempts < config.max_attempts
-ensures: deadline = now + config.confirmation_deadline
+\* Good
+CONSTANTS MAX_ATTEMPTS, CONFIRMATION_DEADLINE
+attempts < MAX_ATTEMPTS
+deadline' = now + CONFIRMATION_DEADLINE
 ```
 
 ---
@@ -1259,7 +1253,7 @@ ensures: deadline = now + config.confirmation_deadline
 | **Sum Type** | Entity constrained to exactly one of several variants via a discriminator field |
 | **Discriminator** | Field whose pipe-separated capitalised values name the variants |
 | **Variant** | One alternative in a sum type, declared with `variant X : Base { ... }` |
-| **Type Guard** | Condition (`requires:` or `if`) that narrows to a variant, unlocking its fields |
+| **Type Guard** | Condition (for example an `IF` branch or guard predicate) that narrows to a variant, unlocking its fields |
 | **Field** | Data stored on an entity or value |
 | **Relationship** | Navigation from one entity to related entities |
 | **Projection** | A filtered view of a relationship |
@@ -1267,7 +1261,7 @@ ensures: deadline = now + config.confirmation_deadline
 | **Parameterised Derived Value** | A derived value that takes arguments, e.g. `can_use_feature(f): f in plan.features` |
 | **Rule** | A specification of behaviour triggered by some condition |
 | **Trigger** | The condition that causes a rule to fire |
-| **Trigger Emission** | An ensures clause that emits a named event; other rules chain from it via their `when` clause |
+| **Trigger Emission** | An action that appends a named event record; other actions can consume it |
 | **Precondition** | A requirement that must be true for a rule to execute |
 | **Postcondition** | An assertion about what becomes true after a rule executes |
 | **Black Box Function** | Domain logic referenced but not defined in the spec; pure and deterministic |

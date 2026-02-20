@@ -24,25 +24,28 @@ Patterns elide common cross-cutting entities (`Email`, `Notification`, `AuditLog
 This pattern handles user registration, login and password reset: the foundation of most SaaS applications.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
-
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+\* excerpt: specifications/password-auth/PasswordAuth.tla
+RequestPasswordReset ==
+    \E email \in Emails, token \in Tokens:
+        /\ UserExists(email)
+        /\ userStatus[email] \in {"active", "locked"}
+        /\ tokenStatus[token] = "absent"
+        /\ tokenStatus' = [t \in Tokens |->
+                           IF t = token THEN "pending"
+                           ELSE IF tokenUser[t] = email /\ tokenStatus[t] = "pending"
+                                THEN "expired"
+                                ELSE tokenStatus[t]]
 ```
 
 **Key language features shown:**
-- `config` block for configurable parameters (`config.min_password_length`, etc.)
-- Derived values (`is_locked`, `is_valid`)
-- Multiple rules for same trigger with different `requires` (login success vs failure)
-- Temporal triggers with guards (`when: token: PasswordResetToken.expires_at <= now` with `requires: status = pending`)
-- Projections for filtered collections (`pending_reset_tokens`)
-- Bulk updates with `for` iteration
-- Explicit `let` binding for created entities
-- Black box functions (`hash()`, `verify()`)
-- Surfaces with `facing` declaration and `for` iteration in `provides`
+- Constants for configurable parameters (`MAX_LOGIN_ATTEMPTS`, `RESET_TOKEN_EXPIRY`)
+- Derived predicates (`UserExists`, `IsLocked`)
+- Alternative guarded actions (login success vs login failure)
+- Time-driven actions with explicit guards (`tokenExpiresAt[token] <= now` and `tokenStatus[token] = "pending"`)
+- Bulk state updates with function comprehensions
+- `LET` bindings for intermediate calculations
+- Black-box assumptions captured as predicate/action boundaries
+- Boundary modeling through dedicated action predicates
 
 ---
 
@@ -53,25 +56,28 @@ Act ==
 This pattern implements hierarchical roles where higher roles inherit permissions from lower ones.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+\* excerpt: specifications/rbac/RBAC.tla
+RoleOf(user, workspace) == membershipRole[workspace][user]
 
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+CanAdmin(user, workspace) ==
+    /\ RoleOf(user, workspace) # "none"
+    /\ "workspace.admin" \in EffectivePermissions(RoleOf(user, workspace))
+
+AddMember ==
+    \E actor \in Users, workspace \in Workspaces, newUser \in Users, role \in Roles:
+        /\ CanAdmin(actor, workspace)
+        /\ membershipRole[workspace][newUser] = "none"
+        /\ membershipRole' = [membershipRole EXCEPT ![workspace][newUser] = role]
 ```
 
 **Key language features shown:**
-- Recursive derived values (`effective_permissions` includes inherited)
-- Null-safe navigation (`inherits_from?.effective_permissions ?? {}`)
-- Join entity lookup (`WorkspaceMembership{user: actor, workspace: workspace}`)
-- Permission checks in `requires` clauses
-- String set membership with `in` operator
-- `.add()` and `.remove()` for set mutation in ensures clauses
-- `not exists` as an outcome (removes the entity)
-- Surfaces with role-based actors and permission-gated actions
-- `related` clause for cross-surface navigation
+- Recursive permission derivation (`EffectivePermissions`)
+- Join-state encoded as nested functions (`membershipRole[workspace][user]`)
+- Permission guards (`CanAdmin(actor, workspace)`)
+- Set-membership checks with `\in`
+- Functional updates with `EXCEPT`
+- Explicit role transitions (`"none"` -> role assignment)
+- Permission-gated action predicates
 
 ---
 
@@ -82,13 +88,18 @@ Act ==
 This pattern handles inviting users to collaborate on resources, whether they're existing users or not.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+\* excerpt: specifications/resource-invitation/ResourceInvitation.tla
+ValidInvitation(i) ==
+    /\ invitationStatus[i] = "pending"
+    /\ invitationExpiresAt[i] > now
 
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+AcceptInvitationExistingUser ==
+    \E invitation \in Invitations, user \in Users, share \in Shares:
+        /\ ValidInvitation(invitation)
+        /\ userEmail[user] = invitationEmail[invitation]
+        /\ shareStatus[share] = "absent"
+        /\ invitationStatus' = [invitationStatus EXCEPT ![invitation] = "accepted"]
+        /\ shareStatus' = [shareStatus EXCEPT ![share] = "active"]
 ```
 
 **Key language features shown:**
@@ -109,70 +120,75 @@ Act ==
 This pattern implements soft delete where items appear deleted but can be restored within a retention period.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+\* excerpt: specifications/soft-delete/SoftDelete.tla
+CanRestore(document) ==
+    /\ documentStatus[document] = "deleted"
+    /\ now < documentDeletedAt[document] + RETENTION_PERIOD
 
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+RestoreDocument ==
+    \E actor \in Users, document \in Documents:
+        /\ CanRestore(document)
+        /\ documentStatus' = [documentStatus EXCEPT ![document] = "active"]
+        /\ documentDeletedAt' = [documentDeletedAt EXCEPT ![document] = 0]
 ```
 
 **Key language features shown:**
-- `status` field with clear lifecycle
-- Nullable timestamps (`deleted_at: Timestamp?`)
-- Projections filtering by status (`documents: all_documents where status = active`)
-- Derived values using config (`retention_expires_at: deleted_at + config.retention_period`)
-- Temporal trigger for automatic cleanup (`when: document: Document.retention_expires_at <= now`)
-- `not exists` for permanent removal, as distinct from soft delete
-- Bulk operations with `for` iteration
+- Explicit lifecycle states (`"active"`, `"deleted"`, `"purged"`)
+- Retention modeled with timestamps and constants
+- Active/deleted views expressed as predicates
+- Time-driven purge action (`documentDeletedAt[d] + RETENTION_PERIOD <= now`)
+- Distinct soft-delete and purge transitions
+- Bulk updates via function comprehensions
 
 ---
 
 ## Pattern 5: Notification Preferences & Digests
 
-**Demonstrates:** Sum types for notification variants, user preferences affecting rule behaviour, digest batching, temporal triggers, surfaces
+**Demonstrates:** Tagged notification kinds, user preferences affecting rule behaviour, digest batching, time-driven actions
 
-This pattern handles in-app notifications with user-controlled email preferences and digest batching. It uses sum types to model different notification kinds, each carrying its own contextual data rather than pre-computed strings.
+This pattern handles in-app notifications with user-controlled email preferences and digest batching. It uses a tagged notification kind to model different notification types while preserving entity references in state.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
-
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+\* excerpt: specifications/notifications/Notifications.tla
+CreateMentionNotification ==
+    \E user \in Users, mentionedBy \in Users, notification \in Notifications:
+        /\ user # mentionedBy
+        /\ notificationKind[notification] = "none"
+        /\ notificationKind' = [notificationKind EXCEPT ![notification] = "mention"]
+        /\ notificationUser' = [notificationUser EXCEPT ![notification] = user]
+        /\ notificationStatus' = [notificationStatus EXCEPT ![notification] = "unread"]
 ```
 
 **Key language features shown:**
-- **Sum types**: `kind: MentionNotification | ReplyNotification | ...` declares notification variants
-- **Variant declarations**: Each notification kind uses `variant X : Notification` syntax
-- **Variant-specific creation rules**: Each variant has its own creation rule with appropriate fields
-- **Exhaustive kind checking**: `SendImmediateEmail` handles all variants explicitly
-- User preferences stored as entity
-- Temporal trigger for per-user digest scheduling (`when: user: User.next_digest_at <= now`)
-- Digest batching with temporal trigger
-- Surfaces with `related` clause linking notification centre to preferences
+- Kind discriminator (`notificationKind`) over a finite domain
+- Variant-specific actions (`CreateMentionNotification`, `CreateReplyNotification`, etc.)
+- Exhaustive preference routing (`PreferenceFor(notification)`)
+- Per-user preference state
+- Time-driven digest scheduling (`nextDigestAt[user] <= now`)
+- Digest batching with set comprehensions
+- Cross-feature linking through shared IDs and action contracts
 
-**Why sum types here?**
+**Why tagged kinds here?**
 
-The previous approach used pre-computed `title`, `body`, and `link` strings:
+The previous approach used stringly-typed payload records:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+LegacyMentionPayload(comment, author) ==
+    [kind |-> "mention",
+     title |-> author \o " mentioned you",
+     body |-> commentPreview[comment],
+     link |-> commentParentUrl[comment]]
 ```
 
-With sum types, each notification carries its actual entity references:
+With sum types, each notification carries entity references in state:
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+\* richer typed alternative
+CreateMentionNotification ==
+    \E user \in Users, author \in Users, notification \in Notifications:
+        /\ user # author
+        /\ notificationKind[notification] = "none"
+        /\ notificationKind' = [notificationKind EXCEPT ![notification] = "mention"]
+        /\ notificationUser' = [notificationUser EXCEPT ![notification] = user]
+        /\ notificationStatus' = [notificationStatus EXCEPT ![notification] = "unread"]
 ```
 
 This is better because:
@@ -190,62 +206,64 @@ This is better because:
 This pattern handles SaaS usage limits: different plans have different quotas, and usage is tracked and enforced.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+\* excerpt: specifications/usage-limits/UsageLimits.tla
+CanAddDocument(workspace) ==
+    LET plan == workspacePlan[workspace] IN
+    planHasUnlimitedDocuments[plan] \/ DocumentCount(workspace) < planMaxDocuments[plan]
 
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+CreateDocument ==
+    \E user \in Users, workspace \in Workspaces, document \in Documents:
+        /\ documentStatus[document] = "absent"
+        /\ CanAddDocument(workspace)
+        /\ documentStatus' = [documentStatus EXCEPT ![document] = "active"]
 ```
 
 **Key language features shown:**
-- Plan definitions with limits
-- Derived boolean checks for limit enforcement (`can_add_document`, `can_add_member`)
-- `requires` checking limits before actions
-- Paired rules for success/failure cases
-- Usage tracking with events
-- Temporal trigger for daily reset (`when: usage: WorkspaceUsage.next_reset_at <= now`)
-- Plan upgrade/downgrade logic with `let` binding to capture pre-mutation state
-- Feature flags (`can_use_feature(f)`)
-- Interaction surface for usage dashboard and API surface with rate limit guarantee
+- Plan definitions with numeric limits
+- Derived guards for limit enforcement (`CanAddDocument`, `CanAddMember`)
+- Guarded create actions
+- Paired success/failure transitions
+- Usage tracking as append-only events
+- Time-driven reset actions
+- Plan upgrade/downgrade checks using `LET` for pre-state
+- Feature flags represented as membership in plan feature sets
 
 ---
 
 ## Pattern 7: Comments with Mentions
 
-**Demonstrates:** Nested entities, parsing for mentions, cross-entity notifications, threading, surfaces
+**Demonstrates:** Nested entities, mention parsing, cross-entity notifications, threading
 
 This pattern implements comments with @mentions, including mention parsing and notification generation.
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
-
-Act ==
-    \E actor \in Actors, resource \in Resources:
-        /\ CanAct(actor, resource)
-        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+\* excerpt: specifications/comments/Comments.tla
+CreateReply ==
+    \E author \in Users, parentComment \in Comments,
+      comment \in Comments, mentionedUsers \in SUBSET Users:
+        /\ commentStatus[parentComment] = "active"
+        /\ commentDepth[parentComment] < 3
+        /\ commentStatus[comment] = "absent"
+        /\ commentReplyTo' = [commentReplyTo EXCEPT ![comment] = parentComment]
+        /\ commentDepth' = [commentDepth EXCEPT ![comment] = commentDepth[parentComment] + 1]
 ```
 
 **Key language features shown:**
-- Nested/recursive entities (comments with replies)
-- Entity creation triggers with binding (`when: mention: CommentMention.created`)
-- Black box functions (`parse_mentions()`, `users_with_usernames()`)
-- Explicit `let` binding for created entities
-- Set operations (`new_mentioned_users - old_mentions`)
-- Depth limiting (`thread_depth < 3`)
-- **Cross-pattern triggers**: Emits `UserMentioned` and `CommentReplied` triggers that Pattern 5 handles
-- Avoiding double notifications (`original_author not in comment.mentioned_users`)
-- Toggle pattern with conditional ensures
-- Join entity with three keys (`CommentReaction{comment, user, emoji}`)
-- Surface with role-conditional actions (author can edit, author or admin can delete)
+- Recursive threading state (reply pointers and depth)
+- Mention extraction through helper predicates
+- `LET`-based intermediate sets for old/new mentions
+- Set difference for incremental mention handling
+- Depth guard (`commentDepth[parentComment] < 3`)
+- Cross-pattern event recording via shared outbox/events
+- Anti-duplication guards for notification fan-out
+- Composite-key reaction state (comment, user, emoji)
+- Role-gated edit/delete action predicates
 
 ---
 
 ## Pattern 8: Integrating Library Specs
 
-**Demonstrates:** External spec references with coordinates, configuration blocks, responding to external triggers, using external entities
+**Demonstrates:** Composition with external domains, configuration constants, reacting to imported events
 
 Library specs are standalone specifications for common functionality - authentication providers, payment processors, email services, etc. They define a contract that implementations must satisfy, and your application spec composes them in.
 
@@ -254,8 +272,15 @@ Library specs are standalone specifications for common functionality - authentic
 This example shows integrating a library OAuth spec into your application. The OAuth spec handles the authentication flow; your application responds to authentication events and manages application-level user state.
 
 ```tla
-\* Compose with library modules via EXTENDS and module instantiation.
-EXTENDS Naturals, Sequences
+\* excerpt: specifications/app-auth/AppAuth.tla
+CreateUserOnFirstLogin ==
+    \E identity \in Identities, session \in Sessions, user \in Users:
+        /\ UsersForEmail(identityEmail[identity]) = {}
+        /\ userStatus[user] = "absent"
+        /\ userEmail[user] = identityEmail[identity]
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ identityUser' = [identityUser EXCEPT ![identity] = user]
+        /\ sessionUser' = [sessionUser EXCEPT ![session] = user]
 ```
 
 ### Example: Payment Processing
@@ -263,20 +288,23 @@ EXTENDS Naturals, Sequences
 This example shows integrating a payment processor spec for subscription billing.
 
 ```tla
-\* Compose with library modules via EXTENDS and module instantiation.
-EXTENDS Naturals, Sequences
+\* excerpt: specifications/billing/Billing.tla
+HandlePaymentFailure ==
+    \E invoice \in Invoices, org \in Organisations:
+        LET sub == orgSubscription[org] IN
+        /\ sub # "none"
+        /\ subscriptionStatus' = [subscriptionStatus EXCEPT ![sub] = "past_due"]
+        /\ outbox' = Append(outbox, [kind |-> "payment_failed", org |-> org, at |-> now])
 ```
 
 **Key language features shown:**
-- External spec references with immutable coordinates (`use "github.com/.../abc123" as alias`)
-- Configuration blocks for external specs (`oauth/config { ... }`)
-- Responding to external triggers (`when: oauth/AuthenticationSucceeded(...)`)
-- Trigger emissions for cross-pattern notification (`UserInformed(...)`)
-- Responding to external state transitions (`when: session: oauth/Session.status transitions_to expiring`)
-- Using external entities (`oauth/Session`, `stripe/Customer`)
-- Linking application entities to external entities (`stripe_customer: stripe/Customer?`)
-- Triggering external actions (`ensures: stripe/CreateSubscription(...)`)
-- Qualified names throughout (`oauth/Session`, `stripe/config.trial_period`)
+- External domains represented by dedicated ID sets/constants
+- Configuration constants for integration behavior
+- Actions that consume imported/auth events
+- Outbox/event emission for downstream workflows
+- State transitions driven by external lifecycle updates
+- Application-to-external linkage via ID mappings
+- Qualified naming conventions for composed modules
 
 ### Library Spec Design Principles
 
@@ -297,8 +325,11 @@ When creating or choosing library specs:
 Patterns can be composed. For example, a complete document collaboration spec might use:
 
 ```tla
-\* Compose with library modules via EXTENDS and module instantiation.
 EXTENDS Naturals, Sequences
+
+\* composition sketch
+\* MODULE Collaboration
+\* EXTENDS RBAC, SoftDelete, Comments, Notifications
 ```
 
 ### Adaptation

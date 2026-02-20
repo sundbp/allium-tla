@@ -62,7 +62,7 @@ Ask: "Could this be implemented differently while still being the same system?"
 
 Examples:
 
-- "Notifications sent via Slack". Could be email, SMS, etc. Abstract to `Notification.created(channel: ...)`.
+- "Notifications sent via Slack". Could be email, SMS, etc. Abstract to an outbox append action keyed by channel.
 - "Interviewers must confirm within 3 hours". This specific deadline matters at the domain level. Include the duration.
 - "We use PostgreSQL". Could be any database. Do not include.
 - "Data is retained for 7 years for compliance". Regulatory requirement. Include.
@@ -105,11 +105,11 @@ When you encounter a specific value (3 hours, 7 days, etc.), ask:
 3. **Is it arbitrary?** Consider whether to include it at all.
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 ### Black boxes
@@ -117,11 +117,11 @@ RuleName ==
 Some logic is important but belongs at a different level:
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 The spec says there is a matching algorithm, that it considers these inputs and that it produces interviewer suggestions. The spec does not say how matching works, what weights are used or the specific algorithm.
@@ -241,8 +241,8 @@ Better to record an open question than assume.
 
 "I'm not sure whether declining should return the candidate to the pool or remove them entirely. Let me note that as an open question."
 
-```
-open_question "When candidate declines, do they return to pool or exit?"
+```tla
+\* OPEN QUESTION: when a candidate declines, should they return to the pool or exit?
 ```
 
 ### Use concrete examples

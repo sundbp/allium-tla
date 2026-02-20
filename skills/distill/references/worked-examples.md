@@ -172,14 +172,14 @@ def cleanup_expired_tokens():
    - `cleanup_expired_tokens` - temporal trigger
 
 4. **Extract preconditions from validation:**
-   - `if not user` becomes `requires: exists user`
-   - `len(new_password) < 12` becomes `requires: length(password) >= 12`
-   - `token.is_valid()` becomes `requires: token.is_valid`
+   - `if not user` becomes a guard (`/\ UserExists(email)`)
+   - `len(new_password) < 12` becomes a strength-domain guard (`/\ newPassword \in StrongPasswords`)
+   - `token.is_valid()` becomes a validity guard (`/\ tokenStatus[token] = "pending" /\ tokenExpiresAt[token] > now`)
 
 5. **Extract postconditions from mutations:**
-   - `token.used = True` becomes `ensures: token.status = used`
-   - `user.set_password(...)` becomes `ensures: user.password_hash = hash(password)`
-   - `mail.send(msg)` becomes `ensures: Email.created(...)`
+   - `token.used = True` becomes `tokenStatus' = [tokenStatus EXCEPT ![token] = "used"]`
+   - `user.set_password(...)` becomes a credential update transition (hashing stays implementation-specific)
+   - `mail.send(msg)` becomes an outbox append (`outbox' = Append(outbox, [kind |-> "password_changed", ...])`)
 
 6. **Strip implementation details:**
    - Remove: `secrets.token_urlsafe(32)`, `generate_password_hash`, `db.session`
@@ -479,8 +479,8 @@ export async function changePlan(req: Request, res: Response) {
    - `changePlan` - external trigger with downgrade validation
 
 5. **Extract the permission/limit pattern:**
-   - Check membership becomes `requires: exists membership`
-   - Check limit becomes `requires: workspace.can_add_project`
+   - Check membership becomes a guard (`/\ membershipRole[workspace][user] # "none"`)
+   - Check limit becomes a guard (`/\ CanCreateProject(workspace)`)
    - Return error with upgrade path becomes a separate rule for limit reached
 
 **Extracted TLA+ spec:**
@@ -515,11 +515,11 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 **The implementation:**
 
 ```tla
-RuleName ==
-    \E x \in Domain:
-        /\ Precondition(x)
-        /\ state' = [state EXCEPT ![x] = "updated"]
-        /\ UNCHANGED <<otherState>>
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Extraction process:**
@@ -546,13 +546,16 @@ RuleName ==
 **Extracted TLA+ spec:**
 
 ```tla
-CanAct(actor, resource) == actor \in Actors /\ resource \in Resources
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
 Act ==
     \E actor \in Actors, resource \in Resources:
         /\ CanAct(actor, resource)
         /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
-        /\ UNCHANGED <<otherState>>
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 **Key observations:**
