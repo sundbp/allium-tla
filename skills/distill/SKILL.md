@@ -53,7 +53,7 @@ At the top of a distilled spec, document what is included and excluded:
 --   - Greenhouse sync (use greenhouse library spec)
 ```
 
-The version marker (`-- tla: N`) must be the first line of every `.tla` file. Use the version number from the root TLA+ skill's `version` frontmatter field.
+The module marker (`---- MODULE TheModuleName ---`) must be the first line of every `.tla` file.
 
 ## Finding the right level of abstraction
 
@@ -148,6 +148,7 @@ ExampleTransition ==
 ```
 
 What we dropped:
+
 - `candidate_id: int` became just `candidacy`
 - `db.session.query(...)` became relationship traversal
 - `secrets.token_urlsafe(32)` removed entirely (token is implementation)
@@ -187,6 +188,7 @@ The hardest judgement call: when is a concrete detail part of the domain vs just
 ### Google OAuth example
 
 You find this code:
+
 ```python
 OAUTH_PROVIDERS = {
     'google': GoogleOAuthProvider(client_id=..., client_secret=...),
@@ -199,12 +201,14 @@ def authenticate(provider: str, code: str) -> User:
 **Question:** Is "Google OAuth" domain-level or implementation?
 
 **It is implementation if:**
+
 - Google is just the auth mechanism chosen
 - It could be replaced with any OAuth provider
 - Users do not see or care which provider
 - The code is written generically (provider is a parameter)
 
 **It is domain-level if:**
+
 - Users explicitly choose Google (vs Microsoft, etc.)
 - "Sign in with Google" is a feature
 - Google-specific scopes or permissions are used
@@ -215,6 +219,7 @@ def authenticate(provider: str, code: str) -> User:
 ### Database choice example
 
 You find PostgreSQL-specific code:
+
 ```python
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 
@@ -224,6 +229,7 @@ class Candidate(Base):
 ```
 
 **Almost always implementation.** The spec should say:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -238,6 +244,7 @@ The specific database is rarely domain-level. Exception: if the system explicitl
 ### Third-party integration example
 
 You find Greenhouse ATS integration:
+
 ```python
 class GreenhouseSync:
     def import_candidate(self, greenhouse_id: str) -> Candidate:
@@ -253,11 +260,13 @@ class GreenhouseSync:
 **Could be either:**
 
 **Implementation if:**
+
 - Greenhouse is just where candidates happen to come from
 - Could be swapped for Lever, Workable, etc.
 - The integration is an implementation detail of "candidates are imported"
 
 Spec:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -268,11 +277,13 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **Product-level if:**
+
 - "Greenhouse integration" is a selling point
 - Users configure their Greenhouse connection
 - Greenhouse-specific features are exposed (like syncing feedback back)
 
 Spec:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -305,6 +316,7 @@ Before extracting any specification, understand the codebase structure:
 4. **Note external integrations.** What third parties does it talk to?
 
 Create a rough map:
+
 ```
 Entry points:
   - API: /api/candidates/*, /api/interviews/*, /api/invitations/*
@@ -331,6 +343,7 @@ class Invitation(Base):
 ```
 
 Becomes:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -379,6 +392,7 @@ def accept_invitation(invitation_id: int, slot_id: int):
 ```
 
 Extract:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:
@@ -433,6 +447,7 @@ def send_reminders():
 ```
 
 Extract:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:
@@ -462,6 +477,7 @@ def import_from_greenhouse(webhook_data):
 ```
 
 Suggests:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -476,6 +492,7 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 Now make a pass through your extracted spec and remove implementation details.
 
 **Before (too concrete):**
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -486,6 +503,7 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **After (domain-level):**
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -496,6 +514,7 @@ TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 Changes:
+
 - `candidate_id: Integer` became `candidacy: Candidacy` (relationship, not FK)
 - `token: String(32)` removed (implementation)
 - `DateTime` became `Timestamp` (domain type)
@@ -510,6 +529,7 @@ The extracted spec is a hypothesis. Validate it:
 3. **Look for gaps.** Code often has bugs or missing features; the spec might reveal them.
 
 Common findings:
+
 - "Oh, that retry logic was a hack, we should remove it"
 - "Actually we wanted X but never built it"
 - "These two code paths should be the same but aren't"
@@ -523,6 +543,7 @@ The same principle applies in elicitation. When a stakeholder describes "we use 
 ### Signals in the code
 
 **Third-party integration modules:**
+
 ```python
 # Finding code like this suggests a library spec
 class StripeWebhookHandler:
@@ -539,6 +560,7 @@ class GoogleOAuthProvider:
 ```
 
 **Generic patterns with specific providers:**
+
 - OAuth flows (Google, Microsoft, GitHub)
 - Payment processing (Stripe, PayPal)
 - Email delivery (SendGrid, Postmark, SES)
@@ -547,6 +569,7 @@ class GoogleOAuthProvider:
 - File storage (S3, GCS)
 
 **Configuration-driven integrations:**
+
 ```python
 # Heavy configuration suggests the integration itself is separable
 OAUTH_CONFIG = {
@@ -572,6 +595,7 @@ OAUTH_CONFIG = {
 **Option 1: Reference an existing library spec**
 
 If a standard library spec exists for this integration:
+
 ```tla
 \* Compose with library modules via EXTENDS and module instantiation.
 EXTENDS Naturals, Sequences
@@ -580,6 +604,7 @@ EXTENDS Naturals, Sequences
 **Option 2: Create a separate library spec**
 
 If no standard spec exists but the integration is generic:
+
 ```tla
 \* Compose with library modules via EXTENDS and module instantiation.
 EXTENDS Naturals, Sequences
@@ -588,6 +613,7 @@ EXTENDS Naturals, Sequences
 **Option 3: Abstract and move on**
 
 If the integration is minor, just abstract it:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:
@@ -609,6 +635,7 @@ ExampleTransition ==
 ```
 
 Instead:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:
@@ -645,11 +672,13 @@ When you find two terms for the same concept (across specs, within a spec, or be
 This is not a resolution. When different parts of a codebase are built against different specs, both terms end up in the implementation: duplicate models, redundant join tables, foreign keys pointing both ways.
 
 **What to do:**
+
 - Choose one term. Cross-reference related specs before deciding.
 - Update all references. Do not leave the old term in comments or "see also" notes.
 - Note the rename in a changelog, not in the spec itself.
 
 **Warning signs in code:**
+
 - Two models representing the same concept (`Order` and `Purchase`)
 - Join tables for both (`order_items`, `purchase_items`)
 - Comments like "equivalent to X" or "same as Y"
@@ -671,11 +700,13 @@ class FeedbackRequest:
 ```
 
 The implicit states are:
+
 - `pending`: requested_at set, feedback_id null, reminded_at null
 - `reminded`: reminded_at set, feedback_id null
 - `submitted`: feedback_id set
 
 Extract to explicit:
+
 ```tla
 CONSTANTS Entities
 VARIABLES entityStatus
@@ -709,6 +740,7 @@ def process_acceptance(invitation, slot):
 ```
 
 Consolidate into one rule:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:
@@ -722,6 +754,7 @@ ExampleTransition ==
 Codebases accumulate features that were built but never used, workarounds for bugs that are now fixed, and code paths that are never executed.
 
 Do not include these in the spec. If you are unsure:
+
 1. Check if the code is actually reachable
 2. Ask developers if it is intentional
 3. Check git history for context
@@ -739,6 +772,7 @@ def send_notification(user, message):
 ```
 
 The spec should capture the intended behaviour, not the bug:
+
 ```tla
 ExampleTransition ==
     \E user \in Users:

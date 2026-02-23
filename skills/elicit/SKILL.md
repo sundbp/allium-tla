@@ -34,7 +34,7 @@ EntityStates == {"absent", "active", "deleted"}
 TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
-The version marker (`-- tla: N`) must be the first line of every `.tla` file. Use the version number from the root TLA+ skill's `version` frontmatter field.
+The module marker (`---- MODULE TheModuleName ---`) must be the first line of every `.tla` file.
 
 ## Finding the right level of abstraction
 
