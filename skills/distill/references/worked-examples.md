@@ -1,6 +1,6 @@
 # Worked examples: from code to spec
 
-These examples show real implementations in Python and TypeScript, then walk through extracting the Allium specification.
+These examples show real implementations in Python and TypeScript, then walk through extracting the TLA+ specification.
 
 ## Example 1: Password Reset (Python/Flask)
 
@@ -172,14 +172,14 @@ def cleanup_expired_tokens():
    - `cleanup_expired_tokens` - temporal trigger
 
 4. **Extract preconditions from validation:**
-   - `if not user` becomes `requires: exists user`
-   - `len(new_password) < 12` becomes `requires: length(password) >= 12`
-   - `token.is_valid()` becomes `requires: token.is_valid`
+   - `if not user` becomes a guard (`/\ UserExists(email)`)
+   - `len(new_password) < 12` becomes a strength-domain guard (`/\ newPassword \in StrongPasswords`)
+   - `token.is_valid()` becomes a validity guard (`/\ tokenStatus[token] = "pending" /\ tokenExpiresAt[token] > now`)
 
 5. **Extract postconditions from mutations:**
-   - `token.used = True` becomes `ensures: token.status = used`
-   - `user.set_password(...)` becomes `ensures: user.password_hash = hash(password)`
-   - `mail.send(msg)` becomes `ensures: Email.created(...)`
+   - `token.used = True` becomes `tokenStatus' = [tokenStatus EXCEPT ![token] = "used"]`
+   - `user.set_password(...)` becomes a credential update transition (hashing stays implementation-specific)
+   - `mail.send(msg)` becomes an outbox append (`outbox' = Append(outbox, [kind |-> "password_changed", ...])`)
 
 6. **Strip implementation details:**
    - Remove: `secrets.token_urlsafe(32)`, `generate_password_hash`, `db.session`
@@ -187,88 +187,15 @@ def cleanup_expired_tokens():
    - Remove: `render_template`, URL construction
    - Keep: durations (1 hour, 12 characters)
 
-**Extracted Allium spec:**
+**Extracted TLA+ spec:**
 
-```
--- password-reset.allium
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-config {
-    reset_token_expiry: Duration = 1.hour
-    min_password_length: Integer = 12
-}
+EntityStates == {"absent", "active", "deleted"}
 
-entity User {
-    email: String
-    password_hash: String
-    status: active | locked | deactivated
-    failed_login_attempts: Integer
-    locked_until: Timestamp?
-
-    reset_tokens: PasswordResetToken with user = this
-    sessions: Session with user = this
-
-    active_sessions: sessions with status = active
-    pending_reset_tokens: reset_tokens with status = pending
-}
-
-entity PasswordResetToken {
-    user: User
-    created_at: Timestamp
-    expires_at: Timestamp
-    status: pending | used | expired
-
-    is_valid: status = pending and expires_at > now
-}
-
-rule RequestPasswordReset {
-    when: UserRequestsPasswordReset(email)
-
-    let user = User{email}
-
-    requires: exists user
-    requires: user.status in {active, locked}
-
-    ensures:
-        for t in user.pending_reset_tokens:
-            t.status = expired
-    ensures:
-        let token = PasswordResetToken.created(
-            user: user,
-            created_at: now,
-            expires_at: now + config.reset_token_expiry,
-            status: pending
-        )
-        Email.created(
-            to: user.email,
-            template: password_reset,
-            data: { token: token }
-        )
-}
-
-rule CompletePasswordReset {
-    when: UserResetsPassword(token, new_password)
-
-    requires: token.is_valid
-    requires: length(new_password) >= config.min_password_length
-
-    let user = token.user
-
-    ensures: token.status = used
-    ensures: user.password_hash = hash(new_password)
-    ensures: user.status = active
-    ensures: user.failed_login_attempts = 0
-    ensures: user.locked_until = null
-    ensures:
-        for s in user.active_sessions:
-            s.status = revoked
-    ensures: Email.created(to: user.email, template: password_changed)
-}
-
-rule ResetTokenExpires {
-    when: token: PasswordResetToken.expires_at <= now
-    requires: token.status = pending
-    ensures: token.status = expired
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **What we removed:**
@@ -552,147 +479,19 @@ export async function changePlan(req: Request, res: Response) {
    - `changePlan` - external trigger with downgrade validation
 
 5. **Extract the permission/limit pattern:**
-   - Check membership becomes `requires: exists membership`
-   - Check limit becomes `requires: workspace.can_add_project`
+   - Check membership becomes a guard (`/\ membershipRole[workspace][user] # "none"`)
+   - Check limit becomes a guard (`/\ CanCreateProject(workspace)`)
    - Return error with upgrade path becomes a separate rule for limit reached
 
-**Extracted Allium spec:**
+**Extracted TLA+ spec:**
 
-```
--- usage-limits.allium
+```tla
+CONSTANTS Entities
+VARIABLES entityStatus
 
-entity Plan {
-    name: String
-    max_projects: Integer           -- -1 = unlimited
-    max_storage_mb: Integer
-    max_team_members: Integer
-    monthly_price: Decimal
-    features: Set<Feature>          -- domain type; define in your spec
+EntityStates == {"absent", "active", "deleted"}
 
-    has_unlimited_projects: max_projects = -1
-    has_unlimited_storage: max_storage_mb = -1
-    has_unlimited_members: max_team_members = -1
-}
-
-entity Workspace {
-    name: String
-    owner: User
-    plan: Plan
-
-    members: WorkspaceMembership with workspace = this
-    all_projects: Project with workspace = this
-
-    -- Projections
-    projects: all_projects with deleted_at = null
-
-    -- Usage calculations
-    project_count: projects.count
-    storage_mb: calculate_storage(this)         -- black box
-    member_count: members.count
-
-    -- Limit checks
-    can_add_project:
-        plan.has_unlimited_projects
-        or project_count < plan.max_projects
-
-    can_add_member:
-        plan.has_unlimited_members
-        or member_count < plan.max_team_members
-
-    can_add_storage(size_mb):
-        plan.has_unlimited_storage
-        or storage_mb + size_mb <= plan.max_storage_mb
-
-    can_use_feature(f): f in plan.features
-}
-
-entity WorkspaceMembership {
-    workspace: Workspace
-    user: User
-}
-
-rule CreateProject {
-    when: CreateProject(user, workspace, name)
-
-    let membership = WorkspaceMembership{workspace, user}
-
-    requires: exists membership
-    requires: workspace.can_add_project
-
-    ensures: Project.created(
-        workspace: workspace,
-        name: name,
-        created_by: user
-    )
-    ensures: UsageEvent.created(
-        workspace: workspace,
-        type: project_created
-    )
-}
-
-rule CreateProjectLimitReached {
-    when: CreateProject(user, workspace, name)
-
-    let membership = WorkspaceMembership{workspace, user}
-
-    requires: exists membership
-    requires: not workspace.can_add_project
-
-    ensures: UserInformed(
-        user: user,
-        about: limit_reached,
-        data: {
-            limit_type: projects,
-            current: workspace.project_count,
-            max: workspace.plan.max_projects
-        }
-    )
-}
-
-rule ChangePlan {
-    when: ChangePlan(user, workspace, new_plan)
-
-    requires: user = workspace.owner
-
-    let is_downgrade = new_plan.monthly_price < workspace.plan.monthly_price
-    let old_plan = workspace.plan
-
-    requires: not is_downgrade
-              or (workspace.project_count <= new_plan.max_projects
-                  or new_plan.has_unlimited_projects)
-    requires: not is_downgrade
-              or (workspace.storage_mb <= new_plan.max_storage_mb
-                  or new_plan.has_unlimited_storage)
-    requires: not is_downgrade
-              or (workspace.member_count <= new_plan.max_team_members
-                  or new_plan.has_unlimited_members)
-
-    ensures: workspace.plan = new_plan
-    ensures: Email.created(
-        to: workspace.owner.email,
-        template: if is_downgrade: plan_downgraded else: plan_upgraded,
-        data: { old_plan: old_plan, new_plan: new_plan }
-    )
-}
-
-rule DowngradeBlocked {
-    when: ChangePlan(user, workspace, new_plan)
-
-    requires: user = workspace.owner
-    requires: new_plan.monthly_price < workspace.plan.monthly_price
-    requires: workspace.project_count > new_plan.max_projects
-              and not new_plan.has_unlimited_projects
-
-    ensures: UserInformed(
-        user: user,
-        about: downgrade_blocked,
-        data: {
-            reason: projects,
-            current: workspace.project_count,
-            limit: new_plan.max_projects
-        }
-    )
-}
+TypeOK == entityStatus \in [Entities -> EntityStates]
 ```
 
 **What we removed:**
@@ -715,175 +514,12 @@ rule DowngradeBlocked {
 
 **The implementation:**
 
-```java
-// entities/Document.java
-@Entity
-@Table(name = "documents")
-@Where(clause = "deleted_at IS NULL")  // Default filter
-public class Document {
-    @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    private String id;
-
-    @Column(nullable = false)
-    private String title;
-
-    @Column(columnDefinition = "TEXT")
-    private String content;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "workspace_id", nullable = false)
-    private Workspace workspace;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "created_by_id", nullable = false)
-    private User createdBy;
-
-    @Column(nullable = false)
-    private Instant createdAt;
-
-    @Column
-    private Instant deletedAt;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "deleted_by_id")
-    private User deletedBy;
-
-    public boolean isDeleted() {
-        return deletedAt != null;
-    }
-
-    public boolean canRestore() {
-        if (deletedAt == null) return false;
-        Instant retentionDeadline = deletedAt.plus(Duration.ofDays(30));
-        return Instant.now().isBefore(retentionDeadline);
-    }
-}
-
-// repositories/DocumentRepository.java
-public interface DocumentRepository extends JpaRepository<Document, String> {
-
-    // This ignores the @Where clause to include deleted documents
-    @Query("SELECT d FROM Document d WHERE d.workspace.id = :workspaceId")
-    List<Document> findAllIncludingDeleted(@Param("workspaceId") String workspaceId);
-
-    @Query("SELECT d FROM Document d WHERE d.workspace.id = :workspaceId AND d.deletedAt IS NOT NULL")
-    List<Document> findDeleted(@Param("workspaceId") String workspaceId);
-
-    @Query("SELECT d FROM Document d WHERE d.workspace.id = :workspaceId AND d.deletedAt IS NOT NULL AND d.deletedAt > :cutoff")
-    List<Document> findRestorable(@Param("workspaceId") String workspaceId, @Param("cutoff") Instant cutoff);
-
-    @Modifying
-    @Query("DELETE FROM Document d WHERE d.deletedAt IS NOT NULL AND d.deletedAt < :cutoff")
-    int permanentlyDeleteExpired(@Param("cutoff") Instant cutoff);
-}
-
-// services/DocumentService.java
-@Service
-@Transactional
-public class DocumentService {
-
-    private static final Duration RETENTION_PERIOD = Duration.ofDays(30);
-
-    @Autowired
-    private DocumentRepository documentRepository;
-
-    @Autowired
-    private WorkspaceMemberRepository memberRepository;
-
-    public void softDelete(String documentId, String userId) {
-        Document document = documentRepository.findById(documentId)
-            .orElseThrow(() -> new NotFoundException("Document not found"));
-
-        if (document.isDeleted()) {
-            throw new IllegalStateException("Document already deleted");
-        }
-
-        // Check permission: creator or admin
-        boolean isCreator = document.getCreatedBy().getId().equals(userId);
-        boolean isAdmin = memberRepository.isAdmin(document.getWorkspace().getId(), userId);
-
-        if (!isCreator && !isAdmin) {
-            throw new ForbiddenException("Not authorized to delete this document");
-        }
-
-        document.setDeletedAt(Instant.now());
-        document.setDeletedBy(userRepository.findById(userId).orElseThrow());
-
-        documentRepository.save(document);
-    }
-
-    public void restore(String documentId, String userId) {
-        // Bypass @Where to find deleted document
-        Document document = documentRepository.findAllIncludingDeleted(documentId)
-            .stream()
-            .filter(d -> d.getId().equals(documentId))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("Document not found"));
-
-        if (!document.canRestore()) {
-            throw new IllegalStateException("Document cannot be restored");
-        }
-
-        // Check permission: original deleter or admin
-        boolean isDeleter = document.getDeletedBy().getId().equals(userId);
-        boolean isAdmin = memberRepository.isAdmin(document.getWorkspace().getId(), userId);
-
-        if (!isDeleter && !isAdmin) {
-            throw new ForbiddenException("Not authorized to restore this document");
-        }
-
-        document.setDeletedAt(null);
-        document.setDeletedBy(null);
-
-        documentRepository.save(document);
-    }
-
-    public void permanentlyDelete(String documentId, String userId) {
-        Document document = documentRepository.findAllIncludingDeleted(documentId)
-            .stream()
-            .filter(d -> d.getId().equals(documentId))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("Document not found"));
-
-        if (!document.isDeleted()) {
-            throw new IllegalStateException("Document must be soft-deleted first");
-        }
-
-        boolean isAdmin = memberRepository.isAdmin(document.getWorkspace().getId(), userId);
-        if (!isAdmin) {
-            throw new ForbiddenException("Only admins can permanently delete");
-        }
-
-        documentRepository.delete(document);
-    }
-
-    public void emptyTrash(String workspaceId, String userId) {
-        boolean isAdmin = memberRepository.isAdmin(workspaceId, userId);
-        if (!isAdmin) {
-            throw new ForbiddenException("Only admins can empty trash");
-        }
-
-        List<Document> deleted = documentRepository.findDeleted(workspaceId);
-        documentRepository.deleteAll(deleted);
-    }
-}
-
-// scheduled/RetentionCleanupJob.java
-@Component
-public class RetentionCleanupJob {
-
-    @Autowired
-    private DocumentRepository documentRepository;
-
-    @Scheduled(cron = "0 0 2 * * *")  // Run at 2 AM daily
-    @Transactional
-    public void cleanupExpiredDocuments() {
-        Instant cutoff = Instant.now().minus(Duration.ofDays(30));
-        int deleted = documentRepository.permanentlyDeleteExpired(cutoff);
-        log.info("Permanently deleted {} expired documents", deleted);
-    }
-}
+```tla
+ExampleTransition ==
+    \E user \in Users:
+        /\ userStatus[user] = "pending"
+        /\ userStatus' = [userStatus EXCEPT ![user] = "active"]
+        /\ UNCHANGED <<outbox>>
 ```
 
 **Extraction process:**
@@ -907,91 +543,19 @@ public class RetentionCleanupJob {
    - Restore: original deleter OR admin
    - Permanent delete: admin only
 
-**Extracted Allium spec:**
+**Extracted TLA+ spec:**
 
-```
--- soft-delete.allium
+```tla
+CanAct(actor, resource) ==
+    /\ actor \in Actors
+    /\ resource \in Resources
+    /\ resourceStatus[resource] = "active"
 
-config {
-    retention_period: Duration = 30.days
-}
-
-entity Document {
-    workspace: Workspace
-    title: String
-    content: String
-    created_by: User
-    created_at: Timestamp
-    status: active | deleted
-    deleted_at: Timestamp?
-    deleted_by: User?
-
-    retention_expires_at: deleted_at + config.retention_period
-    can_restore: status = deleted and retention_expires_at > now
-}
-
-entity Workspace {
-    all_documents: Document with workspace = this
-
-    documents: all_documents with status = active
-    deleted_documents: all_documents with status = deleted
-    restorable_documents: all_documents with can_restore = true
-}
-
-rule DeleteDocument {
-    when: DeleteDocument(actor, document)
-
-    let membership = WorkspaceMembership{workspace: document.workspace, user: actor}
-
-    requires: document.status = active
-    requires: actor = document.created_by or membership.can_admin
-
-    ensures: document.status = deleted
-    ensures: document.deleted_at = now
-    ensures: document.deleted_by = actor
-}
-
-rule RestoreDocument {
-    when: RestoreDocument(actor, document)
-
-    let membership = WorkspaceMembership{workspace: document.workspace, user: actor}
-
-    requires: document.can_restore
-    requires: actor = document.deleted_by or membership.can_admin
-
-    ensures: document.status = active
-    ensures: document.deleted_at = null
-    ensures: document.deleted_by = null
-}
-
-rule PermanentlyDelete {
-    when: PermanentlyDelete(actor, document)
-
-    let membership = WorkspaceMembership{workspace: document.workspace, user: actor}
-
-    requires: document.status = deleted
-    requires: membership.can_admin
-
-    ensures: not exists document
-}
-
-rule EmptyTrash {
-    when: EmptyTrash(actor, workspace)
-
-    let membership = WorkspaceMembership{workspace: workspace, user: actor}
-
-    requires: membership.can_admin
-
-    ensures:
-        for d in workspace.deleted_documents:
-            not exists d
-}
-
-rule RetentionExpires {
-    when: document: Document.retention_expires_at <= now
-    requires: document.status = deleted
-    ensures: not exists document
-}
+Act ==
+    \E actor \in Actors, resource \in Resources:
+        /\ CanAct(actor, resource)
+        /\ audit' = Append(audit, [actor |-> actor, resource |-> resource, at |-> now])
+        /\ UNCHANGED <<resourceStatus>>
 ```
 
 **Key observations:**
